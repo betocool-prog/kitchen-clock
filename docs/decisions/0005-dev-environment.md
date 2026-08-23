@@ -14,8 +14,8 @@ Two firmware targets:
 2. Outdoor sensor (C, Zephyr, nRF52840).
 
 Goals: reproducible builds, minimal host pollution, a fast visible-editor
-loop. The host OS is **Zorin OS** (Ubuntu-based), with Python, GTK and git
-natively available.
+loop. The host OS is **Zorin OS** (Ubuntu-based), with Python (via
+**Miniconda**), GTK, git and SSH natively available.
 
 ## Decision
 
@@ -50,9 +50,18 @@ Host loop:
   build is clean, `./scripts/build-sensor.sh` produces the reproducible
   container-built UF2; drag-drop onto the dev kit.
 
-Host dependencies required: Python 3, `python3-lvgl` from the Zorin/Ubuntu
-package repo, GTK, git, ssh, rsync and a working SDL2 backend (already
-present in a standard Zorin desktop install).
+Host dependencies required:
+
+- **Miniconda** (already installed on the host). A dedicated conda
+  environment `kitchen-clock` is created once with `conda create -n
+  kitchen-clock python=3.12`; LVGL Python bindings are installed inside it
+  via `pip install lvgl`. Avoids polluting the `base` environment and
+  keeps other host Python projects insulated from LVGL version bumps.
+- System-level apt packages: `libsdl2-dev`, `libgtk-3-dev`, `git`,
+  `openssh-client`, `rsync` (most are pre-installed on a standard Zorin
+  desktop; `libsdl2-dev` typically needs an explicit install).
+- Conda env activation: `conda activate kitchen-clock` before any
+  `python -m …` invocation.
 
 ## Consequences
 
@@ -64,7 +73,8 @@ present in a standard Zorin desktop install).
   (~3 years of updates).
 - No closed-source drivers added; everything stays under standard OSS
   licences.
-- The host only needs packages already in the default Zorin repos; no
-  extra channels configured.
+- A fresh conda env keeps the host's `base` environment uncluttered and
+  makes it trivial to delete / rebuild the project's Python world (`conda
+  env remove -n kitchen-clock`).
 - WSL/headless hosts would need X forwarding for the SDL2 window. Zorin
   laptop with a desktop session is fine.
