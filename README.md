@@ -36,7 +36,7 @@ records (ADRs).
 ├── hardware/
 │   ├── main-unit/        # Pi + panel mount + frame
 │   │   └── openscad/
-│   └── indoor-sensor/    # I²C pigtail sensor breakout
+│   └── sensor-unit/      # XIAO+BME280+AA in IP54 enclosure, ×2 (indoor + outdoor)
 ├── firmware/
 │   ├── main-unit/        # Pi app (Python + LVGL)
 │   └── outdoor-sensor/   # Zephyr app (nRF52)

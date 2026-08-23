@@ -9,8 +9,11 @@ Planned layout:
   - `__main__.py` — entry point for `python -m kitchen_clock`.
   - `ui/` — LVGL widgets (split-pane, time, weather, indoor/outdoor
     readouts).
-  - `data/` — sources for clock, indoor sensor (I²C), outdoor sensor
-    (BLE GATT client), Open-Meteo (HTTPS).
+  - `data/` — sources for clock; the **BLE GATT client** subscribes
+    to both sensor units (indoor and outdoor are identical peers;
+    each one's *role* label is loaded from
+    `/etc/kitchen-clock/config.toml` at startup); Open-Meteo HTTPS
+    fetch (current conditions hourly, daily forecast daily).
   - `history.py` — 24 h rolling min/max ring buffer per sensor.
   - `config.py` — load `/etc/kitchen-clock/config.toml`.
 - `pyproject.toml`

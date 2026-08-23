@@ -14,13 +14,14 @@ budget, not quotes.
 | EastRising ER-TFT090-3-3938 (9″ IPS HDMI panel, 5 V, no touch) | buydisplay.com | 1 | 90 | 90 |
 | mini-HDMI → HDMI cable (Type C → Type A), 0.5 m | Core Electronics | 1 | 12 | 12 |
 | Raspberry Pi official 5.1 V / 3 A micro-USB PSU | Core Electronics / element14 | 1 | 18 | 18 |
-| USB Power Splitter PCB (micro-USB in → 2× USB-A out, 5 V) | Pi Hut / Lectronz (`8086 Consultancy`) | 1 | 15 | 15 |
-| USB-A → micro-USB cable, 0.3 m (Pi feed) | AliExpress / Core Electronics | 1 | 4 | 4 |
-| USB-A → bare-wire pigtail, 0.3 m (panel feed, red +, black −) | AliExpress | 1 | 3 | 3 |
+| Micro-USB → VBUS/GND breakout PCB (Adafruit PID 1833) | Core Electronics / Adafruit | 1 | 8 | 8 |
+| JST-style 2-pin inline DC socket (plug + receptacle), AWG22 pigtails | Altronics P7831A (already on hand) | 1 | 0 | 0 |
+| Hookup wire, red + black, AWG22, ~1 m (Y-split inside frame) | Altronics / generic | 1 | 3 | 3 |
+| Cable gland (PG7 or M12) | Altronics | 1 | 3 | 3 |
 | microSD card, 16 GB, A1-rated | generic | 1 | 12 | 12 |
 | 3D-printed frame (PLA/PETG) | local print | 1 | 25 | 25 |
 
-**Main unit subtotal: ~A$200**
+**Main unit subtotal: ~A$196**
 
 ## Sensor units (×2, firmware-identical)
 
@@ -43,7 +44,7 @@ same XIAO+BME280+AA hardware, packaged in the same enclosure. The role
 - Jumper wires, headers, M2.5 standoffs: A$5–10 (incl. freight).
 - AA alkaline cells, two pairs (one per sensor unit): A$10.
 
-**Total project: ~A$325–345**
+**Total project: ~A$321–341**
 
 ## Notes
 
@@ -57,25 +58,30 @@ same XIAO+BME280+AA hardware, packaged in the same enclosure. The role
 - HDMI cable is **mini-HDMI (Type C) → HDMI (Type A)**, not micro-HDMI.
   Pi Zero 2 W has a slim mini-HDMI receptacle; ordered wrong is the #1
   "blank panel" gotcha.
-- Power topology is **Option C**: the official Raspberry Pi 5.1 V / 3 A
-  micro-USB PSU plugs into the splitter PCB's micro-USB input. Outputs:
-  - Branch 1 — USB-A → micro-USB cable → Pi's `micro-USB PWR IN`.
-  - Branch 2 — USB-A → bare-wire pigtail → panel driver board's `5 V /
-    GND` screw terminal (red = +5 V, black = GND).
-  The splitter lives inside the 3D-printed frame; both branches share a
-  common GND via the PSU return path. Net effect: panel current does
-  **not** cross the Pi's polyfuse.
-- Splitter PCB alternatives considered (kept here for procurement
-  flexibility):
-  - **Adafruit Micro B USB 2-Way Y Splitter Cable (PID 3030)** — a
-    pre-built cable, ~US$8, splits a micro-USB input into one
-    data+power micro-USB and one power-only micro-USB. Slightly tidier
-    inside the frame, no PCB to mount, but only two micro-USB outputs
-    so you'd still need a micro-USB → bare-wire pigtail for the panel
-    feed.
-  - AliExpress "Micro USB Power Splitter" PCBs — functionally identical
-    to the Pi Hut board; lower cost (A$3–6) but slower AU shipping and
-    variable build quality.
+- Power topology is **custom harness** (no off-the-shelf splitter PCB):
+  the official Raspberry Pi 5.1 V / 3 A micro-USB PSU's captive
+  micro-USB plug enters the frame through a PG7 cable gland and lands
+  on an **Adafruit PID 1833** Micro-B USB → VBUS/GND breakout PCB
+  (input = micro-B female receptacle; output = plated through-holes
+  for VBUS and GND). AWG22 wires are soldered directly to those pads:
+  - One pair feeds a **JST-style 2-pin inline DC socket** (Altronics
+    P7831A, plug on the harness side, receptacle mounted to the
+    chassis). This is the single service-disconnect point at the
+    frame boundary.
+  - The receptacle's wires enter the frame and **Y-split** into two
+    AWG22 pairs at a soldered splice + heatshrink (a Wago 221-415
+    lever-nut is a reversible alternative): one branch to the Pi's
+    GPIO header (pin 4 = 5 V, pin 6 = GND), one branch to the panel
+    driver board's `5 V / GND` screw terminal (red +, black −).
+  Net effect: panel current does **not** cross the Pi's polyfuse,
+  and the entire power path is soldered with one pluggable service
+  disconnect. No inline slow-blow fuses; protection is delegated to
+  the PSU's own 3 A foldback current limit.
+- Breakout-location flexibility: the Adafruit PID 1833 board is small
+  enough (20 × 10 mm) to live just inside or just outside the back
+  cover. Placement is open until frame layout is finalised.
+- Sensor-unit battery load: both XIAO + BME280 nodes ship with 2× AA
+  alkaline cells per unit. No lithium, no boost stage.
 - Indoor and outdoor sensor units are **identical** firmware and
   hardware. They share the same BOM line item (qty 2). The role one
   each plays is assigned on the Pi side via
