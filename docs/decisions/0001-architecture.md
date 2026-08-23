@@ -21,23 +21,24 @@ temperature, humidity and battery voltage over BLE. Constraints:
 
 ## Decision
 
-**Main unit:** Raspberry Pi Zero 2 W driving a **EastRising
-ER-TFT090-3-3938** 9" IPS HDMI panel (1024×600, 5 V, no touch), held in an
-OpenSCAD-designed 3D-printed bench frame. Powered by the **official
-Raspberry Pi 5.1 V / 3 A micro-USB PSU** routed through a **custom
-soldered harness**: PSU's captive micro-USB plug enters the frame through
-a PG7 cable gland and lands on an **Adafruit PID 1833** micro-B USB →
-VBUS/GND breakout PCB (input = micro-B female receptacle; output =
-plated through-holes for VBUS and GND). AWG22 wires are soldered
-directly to those pads and crimped onto a **JST-style 2-pin inline DC
-socket** (Altronics P7831A) mounted to the frame. The mating plug on
-the harness side is the single service-disconnect point at the frame
-boundary. Inside the frame, the receptacle's wires Y-split at a
-soldered splice (with heatshrink) into two AWG22 pairs: one to the
-Pi's GPIO header (pin 4 = 5 V, pin 6 = GND), one to the panel driver
-board's `5 V / GND` screw terminal (red +, black −). The Pi's micro-USB
-polyfuse is bypassed entirely; fault current is limited by the PSU's
-3 A foldback.
+**Main unit:** Raspberry Pi Zero 2 W (with pre-soldered headers, so the
+5 V / GND pair can be soldered directly to GPIO pins 4 / 6) driving a
+**EastRising ER-TFT090-3-3938** 9" IPS HDMI panel (1024×600, 5 V, no
+touch), held in an OpenSCAD-designed 3D-printed bench frame. Powered by
+the **official Raspberry Pi 5.1 V / 2.5 A (12.5 W) micro-USB PSU** routed
+through a **custom soldered harness**: PSU's captive micro-USB plug
+enters the frame through a PG7 cable gland and lands on an
+**Adafruit PID 1833** micro-B USB → VBUS / GND breakout PCB (input =
+micro-B female receptacle; output = plated through-holes for VBUS and
+GND). AWG22 wires are soldered directly to those pads and crimped onto
+a **JST-style 2-pin inline DC socket** (Altronics P7831A) mounted to the
+frame. The mating plug on the harness side is the single service
+disconnect at the frame boundary. Inside the frame, the receptacle's
+wires Y-split at a soldered splice (with heatshrink) into two AWG22
+pairs: one to the Pi's GPIO header (pin 4 = 5 V, pin 6 = GND), one to
+the panel driver board's `5 V / GND` screw terminal (red +, black −).
+The Pi's micro-USB polyfuse is bypassed entirely; fault current is
+limited by the PSU's 2.5 A foldback.
 
 **Sensor units (×2, firmware-identical):** **Seeed XIAO nRF52840** +
 **BME280** breakout, powered **directly** by 2× AA alkaline cells in series
@@ -64,7 +65,7 @@ on the Pi side only.
   pair mounted at the frame boundary). Repair or replacement of the
   harness is reversible end-to-end.
 - The Pi's micro-USB polyfuse is bypassed; fault current is bounded by
-  the PSU's 3 A foldback only. A wiring short on either branch will
+  the PSU's 2.5 A foldback only. A wiring short on either branch will
   cause the PSU to throttle. No inline slow-blow fuses — see the
   "Power topology" bullet in `docs/bom.md` for the rationale.
 - Pi Zero 2 W's BLE and Wi-Fi share an antenna; two persistent peripheral
