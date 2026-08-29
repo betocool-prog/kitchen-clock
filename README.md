@@ -12,16 +12,16 @@ records (ADRs).
 | Phase | Status | Notes |
 | --- | --- | --- |
 | Spec | done | PROJECT.md captured |
-| Architecture | done | ADRs 0001–0005 in `docs/decisions/` |
+| Architecture | done | ADRs 0001–0006 in `docs/decisions/` |
 | Hardware selection | done | see [`docs/bom.md`](./docs/bom.md) |
-| Dev environment (Docker) | next | Dockerfile + scripts |
-| Blinky on outdoor sensor | queued | Zephyr "hello world" on XIAO nRF52840 |
+| Dev environment (Docker) | queued | Dockerfile + scripts |
+| Sensor firmware (Zephyr BLE peripheral) | **next** | build, flash XIAO nRF52840, verify on phone nRF Connect |
 | Pi app skeleton | queued | Python + LVGL split-pane |
 | Indoor I²C sensor | dropped | replaced by secondary BLE sensor unit |
 | Outdoor BLE client | queued | BlueZ `bluetoothctl` integration, two bonded peers |
 | Open-Meteo fetch | queued | hourly + daily |
 | 24 h min/max history | queued | ring buffer per sensor |
-| 3D-printed frame | queued | OpenSCAD sources |
+| 3D-printed frame | managed in Onshape | user-designed (see ADR 0006) |
 | Bench bring-up | queued | end-to-end test |
 
 ## Repository layout

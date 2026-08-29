@@ -17,7 +17,10 @@ The complete project consists of an internal main unit, the kitchen clock, and a
 - The display is strictly a display, no touch screen required.
 - A 3D printed frame will hold the tool together.
 - The unit shall be supplied by an external 12 DC supply, and optional battery backup (2xAA, 1x 9V).
-- The external sensor shall be supplied by 2x 1.5V AA batteries and use as little power as possible. Boost where necessary.
+- The external sensor shall be supplied by 1x 26650 Li-Ion battery per
+  sensor unit, charged via the XIAO's onboard BQ25101 over USB-C.
+  Power consumption is low (extended deep-sleep between advertisements);
+  no boost stage is required.
 - As long as the project goes, progress should be written into a README.md file, and updated regularly. 
 - The firmware and hardware design shall live in this folder.
 - The development environment shall be a docker container defined within this folder.
