@@ -1,6 +1,6 @@
 # Sensor unit — firmware (Zephyr / nRF52)
 
-_Zephyr 3.7 LTS application, board `xiao_nrf52840`._
+_Zephyr 3.7 LTS application, board `xiao_ble`._
 
 **One binary, two deployments.** The same firmware image ships to
 both the indoor and the outdoor sensor node. The firmware does **not**
@@ -17,12 +17,14 @@ firmware/outdoor-sensor/
     ├── prj.conf              # Kconfig
     ├── CMakeLists.txt        # top-level build script
     ├── boards/
-    │   └── xiao_nrf52840.overlay   # I²C enablement + BME280 node
+    │   └── xiao_ble.overlay   # I²C enablement + BME280 node
     └── src/
         ├── main.c            # entry; init + idle loop
-        ├── ble.c / ble.h     # Local-name "kclock-XX", ESS for
-        │                     #   temp/humidity, custom uint16 char
-        │                     #   for battery voltage in mV
+        ├── ble.c / ble.h     # Local-name "kclock-XX"; custom
+        │                     #   128-bit service hosting the
+        │                     #   standard ESS-style char UUIDs
+        │                     #   0x2A6E (T) and 0x2A6F (H), plus a
+        │                     #   custom uint16 char for battery mV
         ├── sensor.c          # BME280 driver wrapper + battery stub
         ├── power.c           # deep-sleep cadence stub (next step)
         └── mac.c             # prints public BLE address at boot
@@ -30,21 +32,25 @@ firmware/outdoor-sensor/
 
 ## GATT layout
 
-Two services, recognised by nRF Connect:
+**One** primary service, custom 128-bit UUID
+`6b 63 6c 6b - 00 01 - 00 00 - 00 00 - 00 00 00 00 00 01`
+(the first four bytes spell "kclk" in ASCII so the UUID is
+recognisable in a hex dump). It carries three characteristics
+declared with `BT_GATT_SERVICE_DEFINE`:
 
-- **Environmental Sensing Service** (UUID `0x181A`) for temperature
-  (`0x2A6E`) and humidity (`0x2A6F`) — *standard BLE SIG service*.
-  Implemented via `CONFIG_BT_ESS=y`, `BT_ES_DEFINE(...)`,
-  `bt_es_set_temperature()`, `bt_es_set_humidity()`.
-- **A custom service** (UUID `6b63...e0 01`) for **battery voltage
-  in millivolts** as a read-only `uint16` characteristic. Plug a
-  1:1 voltage divider on the BAT rail to the XIAO's SAADC pin and
-  read it via the nRF52 ADC driver; the current `sensor.c`
-  stub returns 0 mV until that wiring is in.
+| Char | UUID | Type | Encoding | Notes |
+| --- | --- | --- | --- | --- |
+| Temperature | `0x2A6E` | read-only | int16, **0.01 °C** | Standard SIG ESS Temperature UUID — `nRF Connect` renders it as a temperature in the right scale. |
+| Humidity    | `0x2A6F` | read-only | uint16, **0.01 %RH** | Standard SIG ESS Humidity UUID. |
+| Battery mV  | Custom 128-bit: `…-0002` | read-only | uint16, **mV** | Custom characteristic under the same service; the Pi-side converts to volts. |
 
-Decimal splitting: a temperature GATT value of `23.45 °C` is rendered
-as `ess.temperature = (val1 = 23, val2 = 450000)`. Same logic for
-humidity.
+> **Note:** Zephyr 3.7 removed the upstream `bt/services/ess.h` header
+> and the `BT_ES_DEFINE` / `bt_es_set_*` macros that 3.x LTS betas
+> exposed. We therefore declare the temperature and humidity
+> characteristics manually under a single custom service, but keep
+> the standard 16-bit ESS characteristic UUIDs so `nRF Connect`
+> recognises them and the Pi-side GATT bindings can read by them
+> without an ESS-specific Knowledge Base entry.
 
 ## Building
 
@@ -53,7 +59,7 @@ humidity.
 ```sh
 cd /work/firmware/outdoor-sensor
 west update                     # clones Zephyr 3.7 LTS once
-west build -b xiao_nrf52840 app
+west build -b xiao_ble app
 cp build/zephyr/zephyr.uf2 /work/dist/outdoor-sensor.uf2
 ```
 
@@ -88,10 +94,12 @@ kitchen-clock sensor firmware: idle (awaiting BLE events)
 ```
 
 In **nRF Connect for Mobile** → **Scan** → pick `kclock-XX` →
-**Connect**. The ESS Temperature and Humidity characteristics appear
-under "Environmental Sensing Service". The custom service shows up
-under the UUID; reading it gives battery voltage in mV (0 until the
-ADC divider is wired).
+**Connect**. The custom service `kclock` (UUID starting `6b 63 6c 6b`)
+appears under "Unknown Service" or — for the temperature and humidity
+characteristics — labelled by `nRF Connect` as **Temperature** and
+**Humidity** thanks to their standard 16-bit ESS UUIDs. Reading
+each characteristic returns the latest values. Battery-mV returns 0
+until the SAADC divider is wired.
 
 ## Open follow-ups
 

@@ -2,6 +2,14 @@
     aliases {
         bme280 = &bme280_i2c;
     };
+
+    leds {
+        compatible = "gpio-leds";
+        green: led_0 {
+            gpios = <&gpio0 26 GPIO_ACTIVE_LOW>;
+            label = "Green LED";
+        };
+    };
 };
 
 &i2c1 {
@@ -9,6 +17,5 @@
     bme280_i2c: bme280@76 {
         compatible = "bosch,bme280";
         reg = <0x76>;
-        label = "BME280";
     };
 };

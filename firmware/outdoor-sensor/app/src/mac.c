@@ -7,15 +7,19 @@
 
 /* Print the public BLE address(es) to the console. Used at boot so
  * the deployer can record each unit's MAC into the Pi's config.toml.
+ *
+ * Zephyr 3.7 changed bt_id_get() to return void: it writes its
+ * outputs via the pointers and cannot fail in the way the older
+ * int-returning API did.
  */
 void kclock_mac_print(void)
 {
     bt_addr_le_t addrs[CONFIG_BT_ID_MAX];
     size_t        count = ARRAY_SIZE(addrs);
 
-    int err = bt_id_get(addrs, &count);
-    if (err) {
-        printk("bt_id_get failed: %d\n", err);
+    bt_id_get(addrs, &count);
+    if (count == 0) {
+        printk("bt_id_get: zero addresses\n");
         return;
     }
 

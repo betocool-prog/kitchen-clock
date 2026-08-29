@@ -9,6 +9,7 @@ target_sources(app PRIVATE
     src/sensor.c
     src/power.c
     src/mac.c
+    src/blinky.c
 )
 
 target_include_directories(app PRIVATE src)

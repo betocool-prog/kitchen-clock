@@ -71,19 +71,19 @@ RUN python3 -m venv /opt/zephyr-venv \
         anytree \
         cbor2
 
-# Zephyr SDK 0.17.2. SHA verified against the upstream `sha256.sum.txt`
-# that ships at the same release tag — no hard-coded hash here so the
-# Dockerfile stays inspectable. If upstream ever rotates, this layer
-# busts cleanly.
-ARG ZEPHYR_SDK_VERSION=0.17.2
+# Zephyr SDK 0.16.9 (the LTS pairing for Zephyr 3.7 LTS — see ADR 0005
+# for why). SHA verified against upstream's `sha256.sum` shipped at the
+# same release tag. No hard-coded hash here; if upstream ever rotates
+# the SDK contents this layer busts cleanly.
+ARG ZEPHYR_SDK_VERSION=0.16.9
 RUN cd /tmp \
-    && wget -q "https://github.com/zephyrproject-rtos/sdk-ng/releases/download/v${ZEPHYR_SDK_VERSION}/sha256.sum.txt" \
-    && wget -q "https://github.com/zephyrproject-rtos/sdk-ng/releases/download/v${ZEPHYR_SDK_VERSION}/zephyr-sdk-${ZEPHYR_SDK_VERSION}_linux-x86_64_gnu.tar.xz" \
-    && sha256sum -c sha256.sum.txt --ignore-missing \
+    && wget -q "https://github.com/zephyrproject-rtos/sdk-ng/releases/download/v${ZEPHYR_SDK_VERSION}/sha256.sum" \
+    && wget -q "https://github.com/zephyrproject-rtos/sdk-ng/releases/download/v${ZEPHYR_SDK_VERSION}/zephyr-sdk-${ZEPHYR_SDK_VERSION}_linux-x86_64.tar.xz" \
+    && sha256sum -c sha256.sum --ignore-missing \
     && mkdir -p /opt/zephyr-sdk \
-    && tar -xJf "zephyr-sdk-${ZEPHYR_SDK_VERSION}_linux-x86_64_gnu.tar.xz" \
+    && tar -xJf "zephyr-sdk-${ZEPHYR_SDK_VERSION}_linux-x86_64.tar.xz" \
         -C /opt/zephyr-sdk --strip-components=1 \
-    && rm "zephyr-sdk-${ZEPHYR_SDK_VERSION}_linux-x86_64_gnu.tar.xz" sha256.sum.txt
+    && rm "zephyr-sdk-${ZEPHYR_SDK_VERSION}_linux-x86_64.tar.xz" sha256.sum
 
 # Install the toolchains. `yes` accepts all bundle prompts; `-c` confirms
 # the host tools re-detection step. arm-zephyr-eabi is what

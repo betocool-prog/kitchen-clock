@@ -27,7 +27,7 @@ docker run --rm \
   bash -lc '
     set -euo pipefail
     source /opt/zephyr-venv/bin/activate
-    west build -b xiao_nrf52840 /work/firmware/outdoor-sensor/app
+    west build -b xiao_ble /work/firmware/outdoor-sensor/app
     cp build/zephyr/zephyr.uf2 /dist/outdoor-sensor.uf2
     echo "Built: /dist/outdoor-sensor.uf2"
   '

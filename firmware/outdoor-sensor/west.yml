@@ -1,8 +1,9 @@
 manifest:
   projects:
     - name: zephyr
-      revision: v3.7-lts
       url: https://github.com/zephyrproject-rtos/zephyr
-      west-commands: scripts/west-commands.yml
-      import:
-        path-prefix: $(ZEPHYR_BASE)
+      revision: v3.7-branch
+      path: zephyr
+      import: true
+  self:
+    path: .

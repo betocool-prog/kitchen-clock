@@ -24,7 +24,7 @@ loop. The host OS is **Zorin OS** (Ubuntu-based), with Python (via
 `docker/Dockerfile` (debian:bookworm-slim):
 
 - Zephyr Python tooling in `/opt/zephyr-venv` (`west`, `pyelftools`).
-- Zephyr SDK 0.17.x at `/opt/zephyr-sdk`, SHA-pinned.
+- Zephyr SDK **0.16.x line** at `/opt/zephyr-sdk`, SHA-pinned (currently `0.16.9`). Per Zephyr 3.7 LTS release notes, the SDK 0.16.x series is the official LTS pairing.
 - `pi-gen` at `/opt/pi-gen` to assemble the Raspberry Pi OS image with
   our overlay.
 - No ARM cross-toolchain: the Pi app runs on the Pi's own Python
@@ -35,7 +35,7 @@ loop. The host OS is **Zorin OS** (Ubuntu-based), with Python (via
 
 Two thin entrypoints mounted from the host repo:
 
-- `scripts/build-sensor.sh`: `west build -b xiao_nrf52840
+- `scripts/build-sensor.sh`: `west build -b xiao_ble
   firmware/outdoor-sensor`, copies `build/zephyr/zephyr.uf2` to `dist/`.
 - `scripts/build-image.sh`: runs `./build.sh` from `pi-gen` with our
   overlay under `docker/pi-overlay/` (installs the Pi app, enables the
@@ -46,7 +46,7 @@ Host loop:
 - Pi app: edit on host, run with `LVGL_SDL2=1 python -m app.main` →
   appears in an SDL2 window at 1024×600. Sync to the Pi via ssh + rsync or
   re-flash.
-- Sensor: edit on host, `west build -b xiao_nrf52840 -p auto`. Once the
+- Sensor: edit on host, `west build -b xiao_ble -p auto`. Once the
   build is clean, `./scripts/build-sensor.sh` produces the reproducible
   container-built UF2; drag-drop onto the dev kit.
 

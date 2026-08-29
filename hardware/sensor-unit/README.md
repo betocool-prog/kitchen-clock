@@ -38,8 +38,8 @@ AWG22 (or AWG24) hook-up wire is soldered between:
 5. **XIAO D5 (SCL) → BME280 SCL**.
 6. **XIAO GND → BME280 GND** (common ground reference).
 
-(D4 / D5 are Zephyr's default I²C pins on `xiao_nrf52840`; the
-`xiao_nrf52840.overlay` in `firmware/outdoor-sensor/app/boards/` pins
+(D4 / D5 are Zephyr's default I²C pins on `xiao_ble`; the
+`xiao_ble.overlay` in `firmware/outdoor-sensor/app/boards/` pins
 the bus to these pads.)
 
 ## Charging

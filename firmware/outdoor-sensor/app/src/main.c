@@ -2,6 +2,7 @@
 #include <zephyr/sys/printk.h>
 
 #include "ble.h"
+#include "blinky.h"
 #include "mac.h"
 #include "power.h"
 #include "sensor.h"
@@ -15,8 +16,8 @@ int main(void)
     int err = kclock_sensor_init();
     if (err) {
         /* Sensor init failure is non-fatal for the BLE bring-up:
-         * the phone can still connect, the ESS characteristics will
-         * just read as zero.
+         * the phone can still connect; the temperature and humidity
+         * characteristics will just read as 0.
          */
         printk("sensor init failed: %d\n", err);
     }
@@ -43,6 +44,16 @@ int main(void)
     kclock_ble_set_readings(temp_centi, hum_centi, batt_mV);
 
     kclock_power_init();
+
+    /* Bring up the on-board LED heartbeat. Failure is non-fatal —
+     * a missing LED just means no visual confirmation that the
+     * bring-up step reached this point.
+     */
+    int blinky_err = kclock_blinky_init();
+    if (blinky_err) {
+        printk("blinky init failed: %d (continuing without LED)\n",
+               blinky_err);
+    }
 
     printk("kitchen-clock sensor firmware: idle (awaiting BLE events)\n");
 
