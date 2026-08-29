@@ -17,6 +17,9 @@ significant decisions, the options considered, and the consequences.
   farm; conda on host for the visible work.
 - [0006 — CAD tooling and enclosure workflow](0006-cad-tooling.md) —
   Onshape for mechanical CAD; no KiCad PCBs.
+- [0007 — Debug console link](0007-debug-console-link.md) —
+  external UART0 on XIAO P1.11/P1.12 paired with a 3.3 V USB-serial
+  dongle, instead of the on-board USB-CDC ACM endpoint.
 
 ## Considered and declined (not in this repo)
 

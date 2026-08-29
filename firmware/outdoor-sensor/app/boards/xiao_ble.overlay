@@ -1,21 +1,55 @@
+/*
+ * Overlay for the Seeed XIAO nRF52840 (board name `xiao_ble`).
+ *
+ * Three things this overlay does:
+ *   1. re-targets the Zephyr printk console from the on-board USB-CDC
+ *      to the XIAO's external UART0 pads (P1.11 TX, P1.12 RX).
+ *      The host-side adapter is a plain 3.3 V USB-serial dongle
+ *      (FTDI / CP2102 / CH340) — see docs/decisions/0004-debug-link.md.
+ *   2. enables the BME280 via the bme280_i2c alias on &i2c1.
+ *   3. leaves the on-board LEDs (`led0` = P0.26 "Red LED",
+ *      `led1` = P0.30 "Green LED", `led2` = P0.06 "Blue LED") at
+ *      their board-default settings — we reuse led0 for the bring-up
+ *      heartbeat in src/blinky.c.
+ *
+ * The board DTS already provides pinctrl-0 entries for uart0 (TX on
+ * P1.11, RX on P1.12), so we just need to drive &uart0 status="okay".
+ */
+
 / {
     aliases {
         bme280 = &bme280_i2c;
     };
 
-    leds {
-        compatible = "gpio-leds";
-        green: led_0 {
-            gpios = <&gpio0 26 GPIO_ACTIVE_LOW>;
-            label = "Green LED";
-        };
+    chosen {
+        zephyr,console      = &uart0;
+        zephyr,shell-uart   = &uart0;
+        /* Keep the BLE-controller transport over USB-CDC so we can
+         * later run HCI traces / mcumgr without disturbing the
+         * external UART debug stream.
+         */
+        zephyr,bt-c2h-uart  = &usb_cdc_acm_uart;
     };
 };
 
 &i2c1 {
     status = "okay";
-    bme280_i2c: bme280@76 {
+    /* 0x77: SDO is the high input on the Adafruit BME280 STEMMA QT
+     * breakout we use. On that breakout SDO is pulled up by an
+     * on-board resistor when the address-select jumper is left
+     * open (the default). If a project's jumper is bridged to GND,
+     * reg must drop to <0x76>.
+     */
+    bme280_i2c: bme280@77 {
         compatible = "bosch,bme280";
-        reg = <0x76>;
+        reg = <0x77>;
     };
+};
+
+&uart0 {
+    status = "okay";
+    pinctrl-0     = <&uart0_default>;
+    pinctrl-1     = <&uart0_sleep>;
+    pinctrl-names = "default", "sleep";
+    current-speed = <115200>;
 };

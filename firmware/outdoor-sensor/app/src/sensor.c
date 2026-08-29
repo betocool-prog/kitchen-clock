@@ -14,6 +14,12 @@ int kclock_sensor_init(void)
 #if DT_NODE_HAS_STATUS(DT_ALIAS(bme280), okay)
     if (!device_is_ready(bme280)) {
         printk("BME280 device not ready\n");
+        printk("  expected wiring on the XIAO nRF52840:\n");
+        printk("    SDA -> D2 (P0.04)  [maps to &i2c1 in devicetree]\n");
+        printk("    SCL -> D3 (P0.05)  [maps to &i2c1 in devicetree]\n");
+        printk("    VDD -> 3V3\n");
+        printk("    GND -> GND\n");
+        printk("    addr 0x77 (Adafruit STEMMA QT, SDO jumper open)\n");
         return -ENODEV;
     }
     printk("BME280 ready\n");

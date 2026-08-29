@@ -5,21 +5,18 @@
 #include <zephyr/sys/printk.h>
 
 /*
- * P0.26 is the green on-board LED on the Seeed XIAO nRF52840
- * (board name `xiao_ble` in Zephyr 3.7). 250 ms on / 250 ms off
+ * P0.26 is the XIAO nRF52840's on-board `led0`, brought in by our
+ * overlay reusing the board DTS entry. 250 ms on / 250 ms off
  * → 2 Hz blink, a clear "I'm running" heartbeat that doesn't risk
  * running inside a BLE radio window or the BME280 forced-mode
  * conversion window.
  */
 #define BLINK_PERIOD_MS  250u
 
-#if DT_NODE_HAS_STATUS(DT_NODELABEL(green), okay)
-static const struct gpio_dt_spec led = GPIO_DT_SPEC_GET(DT_NODELABEL(green), gpios);
+#if DT_NODE_HAS_STATUS(DT_NODELABEL(led0), okay)
+static const struct gpio_dt_spec led = GPIO_DT_SPEC_GET(DT_NODELABEL(led0), gpios);
 #else
-/* Fallback if the overlay haven't been loaded (defensive only —
- * the overlay should make DT_NODELABEL(green) exist).
- */
-#error "DT node `green` is not defined in the devicetree overlay"
+#error "DT node `led0` is not defined for the XIAO nRF52840 board"
 #endif
 
 static struct k_thread blinky_thread;

@@ -77,9 +77,20 @@ steps; either path works.
 
 ## Verifying with nRF Connect
 
+### Console
+
+`printk(...)` is routed to the XIAO nRF52840's external **UART0** pads
+(P1.11 = TX, P1.12 = RX). Connect a 3.3 V USB-serial dongle (FTDI,
+CP2102 or CH340) to those two castellations plus GND, and read it
+from the host:
+
 ```sh
-tio -b 115200 /dev/ttyACM0       # USB-CDC console
+tio -b 115200 /dev/ttyUSB0
 ```
+
+The on-board USB-C port is **not** the printk link — Linux can lose
+the CDC-ACM endpoint after a soft reset of the XIAO, swallowing
+output. UART is robust against that.
 
 You should see lines like:
 
@@ -90,8 +101,13 @@ BME280 ready
 BLE ready: name=kclock-XX
 BLE addr[0] = AA:BB:CC:DD:EE:XX
 sensor: 23.45 C, 47.20 %RH
+blinky: thread running (P0.26, 250 ms period)
 kitchen-clock sensor firmware: idle (awaiting BLE events)
 ```
+
+The LED at **P0.26** also blinks at 2 Hz (250 ms on / 250 ms off) so
+you can confirm the firmware is alive even if the host-side serial
+is disconnected.
 
 In **nRF Connect for Mobile** → **Scan** → pick `kclock-XX` →
 **Connect**. The custom service `kclock` (UUID starting `6b 63 6c 6b`)

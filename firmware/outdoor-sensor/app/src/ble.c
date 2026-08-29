@@ -142,22 +142,30 @@ int kclock_ble_init(void)
 {
     int err;
 
-    bt_addr_le_t addrs[CONFIG_BT_ID_MAX];
-    size_t        count = ARRAY_SIZE(addrs);
-
-    bt_id_get(addrs, &count);
-    if (count == 0) {
-        printk("bt_id_get returned 0 addresses\n");
-        return -ENODEV;
-    }
-
-    set_local_name_from_addr(&addrs[0]);
-
+    /* In Zephyr 3.7 `bt_id_get()` only returns valid addresses AFTER
+     * `bt_enable()` has finished initialising the controller. So
+     * the order is: enable, then read addresses, then name, then
+     * advertise. Calling bt_id_get before bt_enable returns 0
+     * addresses, even though there is no fault — it just has not
+     * been told anything yet.
+     */
     err = bt_enable(NULL);
     if (err) {
         printk("bt_enable failed: %d\n", err);
         return err;
     }
+
+    bt_addr_le_t addrs[CONFIG_BT_ID_MAX];
+    size_t        count = ARRAY_SIZE(addrs);
+
+    bt_id_get(addrs, &count);
+    if (count == 0) {
+        printk("bt_id_get: controller initialised but 0 identities "
+               "(check CONFIG_BT_ID_MAX and FICR.NRF_FICR_DEVICEADDR<n>)\n");
+        return -ENODEV;
+    }
+
+    set_local_name_from_addr(&addrs[0]);
 
     err = bt_le_adv_start(BT_LE_ADV_CONN, ad, ARRAY_SIZE(ad), NULL, 0);
     if (err) {
