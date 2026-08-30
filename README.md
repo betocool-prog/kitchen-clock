@@ -16,14 +16,14 @@ records (ADRs).
 | Hardware selection | done | see [`docs/bom.md`](./docs/bom.md) |
 | Dev environment (Docker) | queued | Dockerfile + scripts |
 | Sensor firmware (Zephyr BLE peripheral) | done | builds and ships on nRF52; verified on nRF Connect; UART P1.11/P1.12 debug link |
-| Pi SD-card provisioning | **done (bench)** | Trixie 32-bit image + `prep-sdcard.sh` brings the Pi up on `192.168.0.49/24` over `TelstraD87381-24` with hostname `kclock` and SSH active. See ADR 0008. Next iteration: bake the prep into pi-gen so re-flash is one step. |
-| Pi app skeleton | queued | Python + LVGL split-pane |
+| Pi SD-card provisioning | **done** | Trixie 32-bit + `prep-sdcard.sh` brings the Pi up on `192.168.0.49/24` over `TelstraD87381-24`, hostname `kclock`, SSH active. Survives reboot via `kclock-wifi-unblock.service` (see ADR 0008). |
+| Bench bring-up | **done** | end-to-end from cold-flash: console login → wifi unblocked → NM associates → static IPv4 → ping WAN. Repeatable across reboots. |
+| Pi app skeleton | queued | Python + LVGL split-pane (next) |
 | Indoor I²C sensor | dropped | replaced by secondary BLE sensor unit |
 | Outdoor BLE client | queued | BlueZ `bluetoothctl` integration, two bonded peers |
 | Open-Meteo fetch | queued | hourly + daily |
 | 24 h min/max history | queued | ring buffer per sensor |
 | 3D-printed frame | managed in Onshape | user-designed (see ADR 0006) |
-| Bench bring-up | queued | end-to-end test |
 
 ## Repository layout
 

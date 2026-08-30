@@ -1,7 +1,7 @@
 /.vscode/
 **/.west/
 **/build/
-
+**/__pycache__/
 # Secrets — never commit secrets.env (the SD-card provisioning
 # loader; values are user-supplied). secrets.env.example is the
 # placeholder version and IS committed.

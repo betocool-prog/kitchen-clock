@@ -178,12 +178,17 @@ Bench-bench bring-up proven: from a 32-bit (Trixie) Pi OS image,
 `scripts/prep-sdcard.sh` + baked-in `homewifi.nmconnection` yields
 NM `homewifi` **activated with `192.168.0.49/24` manual IPv4**,
 default route via `192.168.0.1`, DNS `192.168.0.1 1.1.1.1`, sshd up.
+Survives reboot — `kclock-wifi-unblock.service` reasserts
+`rfkill unblock wifi` and `WirelessEnabled=true` on every
+boot, undoing Trixie firstboot's two-step revert. (See ADR `0008`.)
 
 So the next steps:
 
 - [x] Pi reachable on the LAN at `192.168.0.49/24`.
 - [x] `nmcli con show homewifi` returns `STATE: activated`, IPv4 manual.
 - [x] `ping 8.8.8.8` from UART shell yields sub-100ms RTT.
+- [x] Survives `sudo reboot` / power-cycle (re-runs `prep-sdcard.sh`
+      is unnecessary; cards boot presentable straight from cold).
 - [ ] Migrate the SD-prep workflow into a pi-gen overlay so a
       `dist/kitchen-clock.img` is produced. See ADR `0008`.
 - [ ] Drop `firmware/main-unit/` (Python LVGL app, BLE GATT

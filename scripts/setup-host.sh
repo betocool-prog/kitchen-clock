@@ -4,10 +4,15 @@
 #   One-time host setup for the kitchen-clock project.
 #
 # - Verifies miniconda is present.
-# - Installs required apt system packages (libsdl2-dev, etc.).
+# - Installs required apt system packages (libsdl2-dev etc.).
 # - Creates the conda env `kitchen-clock` if absent.
-# - Installs Python deps (LVGL bindings) in that env.
+# - Installs Python deps in that env (PyGame renderer for host-dev,
+#   bleak + dbus-python for the BLE GATT client).
 #
+# NB on the LVGL Python binding: the `lvgl` package on PyPI is currently
+# broken for Linux sdist install (its setup.py imports a missing
+# `builder/` module). See ADR 0005 ("Dev environment") for the
+# rationale — dev uses PyGame on host, LVGL only on the Pi runtime.
 # Re-runs are idempotent: missing apt packages are installed; the conda
 # env is updated, not recreated.
 
@@ -65,17 +70,39 @@ if conda env list | awk '{print $1}' | grep -qx "$ENV_NAME"; then
   say "Conda env '$ENV_NAME' already exists. Updating deps."
   conda activate "$ENV_NAME"
   pip install --upgrade pip
-  pip install --upgrade lvgl
+  # Renderer for the SDL2 window on host = PyGame (works on cp312
+  # without compilation). See ADR 0005 / "Renderer strategy".
+  pip install --upgrade 'pygame>=2.5' 'dbus-python>=1.3' 'bleak>=0.21'
 else
   say "Creating conda env '$ENV_NAME' (Python ${PY_VERSION})."
   conda create -y -n "$ENV_NAME" "python=${PY_VERSION}"
   conda activate "$ENV_NAME"
   pip install --upgrade pip
-  pip install lvgl
+  pip install 'pygame>=2.5' 'dbus-python>=1.3' 'bleak>=0.21'
 fi
 
 # 4. sanity-check
-say "Verifying LVGL Python import."
-python -c "import lvgl; print('lvgl', lvgl.__version__)"
+say "Verifying host renderer + BLE deps."
+python - <<'PY'
+from importlib.metadata import version, PackageNotFoundError
+
+def v(name):
+    try:
+        return version(name)
+    except PackageNotFoundError:
+        return "(not installed)"
+
+print("pygame     ", v("pygame"))
+print("dbus-python", v("dbus-python"))
+print("bleak      ", v("bleak"))
+
+# Light import smoke test (don't access __version__ — bleak 3.x
+# dropped it as a public attribute). We just need to know each lib
+# imports cleanly inside this Conda env.
+import pygame    # noqa: F401
+import dbus      # noqa: F401
+import bleak     # noqa: F401
+print("imports    pygame ✓ dbus ✓ bleak ✓")
+PY
 
 say "Host setup complete. Activate with: conda activate $ENV_NAME"
