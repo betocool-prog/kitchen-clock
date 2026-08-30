@@ -1,0 +1,42 @@
+[Unit]
+Description=kclock: pre-NetworkManager wifi rfkill unblock + WirelessEnabled=true
+Documentation=man:NetworkManager(8) man:rfkill(8)
+DefaultDependencies=no
+# Run between local-fs.target and network.target so wifi is
+# unblocked before NetworkManager / wpa_supplicant claim wlan0.
+After=local-fs.target
+Before=network-pre.target network.target network-online.target
+Before=NetworkManager.service wpa_supplicant.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+
+# Each ExecStart is prefixed with `-` so a missing helper binary
+# or a transient environment failure does NOT block NetworkManager
+# from coming up at all. The systemd unit parser does NOT expand
+# heredocs or backticks; the only way to run a shell pipeline
+# inside an ExecStart is `ExecStart=/bin/sh -c '...'`. We use that
+# idiom below for the multi-line NM-state file write.
+ExecStart=-/usr/sbin/rfkill unblock wifi
+ExecStart=-/usr/sbin/rfkill unblock bluetooth
+
+# Ensure /var/lib/NetworkManager/NetworkManager.state exists and
+# has WirelessEnabled=true. Trixie's firstrun.sh deliberately
+# sets WirelessEnabled=false on first boot to suppress radiating
+# before a country is set; we have already set the country via
+# the cmdline's cfg80211.ieee80211_regdom=AU plus
+# /etc/wpa_supplicant/wpa_supplicant.conf country=AU, so flipping
+# WirelessEnabled=true here is sufficient.
+ExecStart=-/bin/sh -c 'mkdir -p /var/lib/NetworkManager; printf "[main]\nNetworkingEnabled=true\nWirelessEnabled=true\nWWANEnabled=true\n" > /var/lib/NetworkManager/NetworkManager.state; chmod 0600 /var/lib/NetworkManager/NetworkManager.state'
+
+[Install]
+RequiredBy=NetworkManager.service
+
+# We deliberately use RequiredBy= so NetworkManager *is*
+# guaranteed to wait for this service. Failures are bounded by
+# ExecStart=- so the service is always considered successful even
+# if some side-path (rfkill might be missing on a non-Pi image, the
+# state dir might be read-only) fails. The substantive work is
+# best-effort and the requirement is "ensure NM has a 'start' that
+# succeeds if our tuning has run".

@@ -20,6 +20,17 @@ significant decisions, the options considered, and the consequences.
 - [0007 — Debug console link](0007-debug-console-link.md) —
   external UART0 on XIAO P1.11/P1.12 paired with a 3.3 V USB-serial
   dongle, instead of the on-board USB-CDC ACM endpoint.
+- [0008 — Pi SD-card provisioning](0008-pi-provisioning.md) —
+  eleven files dropped onto a freshly flashed Pi OS Lite Bookworm
+  64-bit card by `scripts/build-sd-bundle.sh` and
+  `scripts/prep-sdcard.sh`. Static IPv4 on `wlan0`, hashed PSK,
+  keys + password allowed.
+- [0009 — Pi Zero direct UART console](0009-pi-uart-direct-console.md) —
+  3.3 V USB-TTL dongle wired onto GPIO 14/15 + `enable_uart=1` +
+  `console=serial0,115200` + `serial-getty@ttyAMA0.service` getty
+  symlink. Standby debug path that doesn't depend on Wi-Fi.
+  (Previously proposed USB-OTG `g_serial`; renamed because the
+  OTG alternative didn't enumerate reliably.)
 
 ## Considered and declined (not in this repo)
 

@@ -1,0 +1,7 @@
+kitchen-clock main unit
+=========================================
+Authorised access only. SSH keys are
+enforced. Password authentication is
+permitted for first-time setup or
+recovery; rotate to keys-only once the
+Pi is fully provisioned.
