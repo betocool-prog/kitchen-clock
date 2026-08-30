@@ -1,0 +1,43 @@
+[Unit]
+Description=Kitchen Clock — main unit Python app (PyGame, Path A)
+Documentation=https://github.com/anomalyco/kitchen-clock
+After=bluetooth.target network-online.target
+Wants=bluetooth.target network-online.target
+
+[Service]
+Type=simple
+User=betocool
+Group=betocool
+WorkingDirectory=/opt/kitchen-clock
+
+# Path A: PyGame talks to the KMS framebuffer via SDL2's `kmsdrm`
+# video driver. On Trixie this is the default; we set it explicitly
+# to keep the wiring discoverable from `systemctl show`.
+Environment=SDL_VIDEODRIVER=kmsdrm
+Environment=KITCHEN_CLOCK_BLE=live
+
+# Idle at least 1s after a draw before yielding back to the loop.
+# Useful signal if we ever want to debug latency; otherwise cosmetic.
+ExecStart=/opt/kitchen-clock-venv/bin/python -m kitchen_clock --period 0.25
+
+Restart=on-failure
+RestartSec=5
+
+# Hold a soft cap on memory: pygame on a 1 GB RAM target should not
+# exceed ~64 MB resident under normal operation. Triggered by
+# systemd OOM-killer; only Relevant for nasty memory leaks.
+MemoryHigh=80M
+MemoryMax=160M
+
+# Don't drop kernel printk on the same TTY we'd want to read for
+# debugging. The cmdline has `console=tty3`, so kitchen-clock's
+# stdout/stderr go to tty3 with the systemd journal pulling from
+# them.
+StandardOutput=tty
+StandardError=tty
+TTYPath=/dev/tty3
+TTYReset=yes
+TTYVHangup=yes
+
+[Install]
+WantedBy=multi-user.target

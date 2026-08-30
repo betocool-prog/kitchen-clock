@@ -9,10 +9,8 @@
 # - Installs Python deps in that env (PyGame renderer for host-dev,
 #   bleak + dbus-python for the BLE GATT client).
 #
-# NB on the LVGL Python binding: the `lvgl` package on PyPI is currently
-# broken for Linux sdist install (its setup.py imports a missing
-# `builder/` module). See ADR 0005 ("Dev environment") for the
-# rationale — dev uses PyGame on host, LVGL only on the Pi runtime.
+# Renderer: PyGame on both host dev and the Pi runtime. Path A —
+# see ADR 0011. There is no LVGL install on the host or Pi.
 # Re-runs are idempotent: missing apt packages are installed; the conda
 # env is updated, not recreated.
 

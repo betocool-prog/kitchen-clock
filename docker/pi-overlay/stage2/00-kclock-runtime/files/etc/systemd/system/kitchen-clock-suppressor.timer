@@ -1,0 +1,9 @@
+[Unit]
+Description=Refresh kitchen-clock screen-blanker inhibit lock (24h cycle)
+
+[Timer]
+OnCalendar=daily
+Persistent=true
+
+[Install]
+WantedBy=timers.target

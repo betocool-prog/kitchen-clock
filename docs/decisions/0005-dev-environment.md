@@ -4,7 +4,15 @@ Date: 2026-08-22
 
 ## Status
 
-Accepted (revised 2026-08-30 after the LVGL-on-Linux sdist breakage).
+Superseded by `0011-pygame-on-pi-runtime.md` for **renderer strategy** (2026-08-30).
+
+The original 2026-08-22 acceptance covered the host dev recipe
+(miniconda + SDL2 stack + APK packages). The 2026-08-30 revision
+introduced Path C (PyGame host, LVGL Pi runtime) which was then
+replaced on the same date by Path A (PyGame on both) — see ADR 0011.
+
+The host dev recipe below is unchanged for ADR 0011 and remains
+correct.
 
 ## Context
 
@@ -18,6 +26,12 @@ loop. The host OS is **Zorin OS** (Ubuntu-based), with Python (via
 **Miniconda**), GTK, git and SSH natively available.
 
 ## Renderer strategy (revised 2026-08-30)
+
+> **SUPERSEDED 2026-08-30 by `0011-pygame-on-pi-runtime.md`.** This
+> section is retained for historical context only. The Path A
+> decision (PyGame on both host dev and Pi runtime) replaced Path C
+> (which we previously kept here). Use ADR 0011 for current renderer
+> strategy.
 
 A binding layer underneath LVGL's Python package currently has a
 broken sdist on Linux: `lvgl-0.1.1b0` on PyPI imports a `builder/`
@@ -42,7 +56,6 @@ The widget tree is identical regardless of which renderer is bound —
 the same widgets / layouts / data flows render in either backend.
 `kitchen_clock/ui/window.py` selects the renderer via a
 `KITCHEN_CLOCK_RENDERER` env var (`pygame` on host, `lvgl` on Pi).
-That's the full architectural change.
 
 ## Decision
 

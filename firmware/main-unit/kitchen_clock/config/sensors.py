@@ -22,9 +22,6 @@
 # `'indoor'` as the location strings because they flow into UI
 # labelling.
 
-# Tuple of (mac_uppercase, advertised_name, location).
-# `location` is a free string, but the project convention is
-# "indoor" / "outdoor" / "kitchen" / "attic" / ...
 KCLOCK_SENSORS = (
     # Discovered on 2026-08-30 from `kclock-d0`. RSSI blank on
     # bleak 3.x unless we read details['rssi'].
