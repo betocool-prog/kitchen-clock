@@ -31,15 +31,15 @@ RestartSec=5
 MemoryHigh=80M
 MemoryMax=160M
 
-# Don't drop kernel printk on the same TTY we'd want to read for
-# debugging. The cmdline has `console=tty3`, so kitchen-clock's
-# stdout/stderr go to tty3 with the systemd journal pulling from
-# them.
-StandardOutput=tty
-StandardError=tty
-TTYPath=/dev/tty3
-TTYReset=yes
-TTYVHangup=yes
+# Stdout/stderr go to the systemd journal. Previously had
+# StandardOutput=tty; TTYPath=/dev/tty3 so runs landed on /dev/tty3
+# (which kernel console=tty3 keeps for getty). That caused visible
+# overlay text on the panel because the pyGame renderer writes to
+# /dev/fb0 — a separate layer below tty3 on the KMS surface. The
+# journal-based sink leaves the panel clean while preserving
+# diagnostics via `journalctl -u kitchen-clock.service -f`.
+StandardOutput=journal
+StandardError=journal
 
 [Install]
 WantedBy=multi-user.target
