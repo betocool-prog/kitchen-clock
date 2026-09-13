@@ -88,10 +88,56 @@ class BaseRunner:
         self.last_readings: list = [None] * len(self.sensors)
 
     async def _tick(self) -> None:
+        import sys
+        t0_read = _time.monotonic()
         self.last_readings = await read_all_sensors(
             self.sensors, self.cache.client_for,
         )
+        t1_read = _time.monotonic()
+        # Compact one-line BLE state summary — gives journalctl a
+        # way to see whether each tile is producing live readings or
+        # sitting on connect-fail / per-character errors. Don't roof
+        # the journal: a tick is ~0.3 s, so 3 lines/s is fine.
+        try:
+            tick_n = getattr(self, "_ble_tick_counter", 0) + 1
+            self._ble_tick_counter = tick_n
+            states = " ".join(
+                f"{r.location}={r.source.split(':', 1)[0]}"
+                f":T={r.temp_c if isinstance(r.temp_c, (int, float)) else '-'}"
+                f":H={r.hum_percent if isinstance(r.hum_percent, (int, float)) else '-'}"
+                f":B={r.batt_mV if isinstance(r.batt_mV, int) else '-'}"
+                for r in self.last_readings
+            )
+            print(
+                f"[BaseRunner] tick #{tick_n} state: {states}",
+                file=sys.stderr, flush=True,
+            )
+        except Exception:
+            pass
+        # Highlight non-live / non-mock states with the raw source
+        # string sojourners can grep for the full exception at the
+        # next layer down (e.g. "ModulationError: ...").
+        for r in self.last_readings:
+            if r.source not in ("live", "mock"):
+                print(
+                    f"[BaseRunner] BLE diag[{r.location}]: "
+                    f"mac={r.mac} source={r.source}",
+                    file=sys.stderr, flush=True,
+                )
+        # Render to the surface.
+        t0_draw = _time.monotonic()
         self._draw()
+        t1_draw = _time.monotonic()
+        # Slow-tick diagnostic: bump the threshold once per tick to
+        # see breakdown when something regresses.
+        if (t1_draw - t0_read) > 0.5:
+            print(
+                f"[BaseRunner] tick breakdown: "
+                f"read={(t1_read - t0_read):.2f}s "
+                f"draw={(t1_draw - t0_draw):.2f}s "
+                f"total={(t1_draw - t0_read):.2f}s",
+                file=sys.stderr, flush=True,
+            )
 
     async def run(self) -> None:
         raise NotImplementedError("subclass")
