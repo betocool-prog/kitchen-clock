@@ -4,11 +4,12 @@ The two backends differ only on the `_draw()` side; the
 "gather → draw → sleep → repeat" loop is identical, as is the
 per-sensor exception fence.
 
-Path C (ADR 0005): this file is shared across host (PyGame) and
-Pi runtime (LVGL). It deliberately imports nothing from pygame or
-lvgl so it stays importable from either side without side-effects.
+Path A (ADR 0011): this file is shared across host (PyGame) and
+Pi runtime (FbdevRunner). It deliberately imports nothing from
+pygame so it stays importable from either side without side-effects.
 """
 import asyncio
+import time as _time
 from typing import Callable, List, Tuple
 
 from .ble.bleak_client import SensorReading
