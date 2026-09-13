@@ -12,6 +12,7 @@ firmware/zephyr/
 
 # Local diagnostic artifacts (panel screenshots for visual review).
 /panel-snapshot*.png
+/panel-snapshots/
 
 # Secrets — never commit secrets.env (the SD-card provisioning
 # loader; values are user-supplied). secrets.env.example is the
