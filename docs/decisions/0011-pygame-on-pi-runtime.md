@@ -32,15 +32,17 @@ design win than the marginal smoothness we get from LVGL.
 
 ## Decision
 
-PyGame is the **only** renderer on host dev and on the Pi runtime.
+Path A keeps the **data flow** identical between host dev and Pi
+runtime, but splits the **renderer** at the surface level:
 
-- `kitchen_clock/ui/window.py` returns `PygameRunner`. Any value
-  other than `pygame` for `KITCHEN_CLOCK_RENDERER` raises
-  `ValueError` pointing at this ADR.
-- `kitchen_clock/ui/lvgl_window.py` is **deleted**. There is no
-  deprecation alias. There is no Path C backstop.
-- `pyproject.toml` describes the package as PyGame-only; the
-  `dependencies` list is unchanged (`pygame`, `dbus-python`, `bleak`).
+- `kitchen_clock/ui/window.py` returns one of two runners, picked
+  by `KITCHEN_CLOCK_RENDERER`:
+  - `'pygame'` — host dev. `PygameRunner` opens an SDL2 window.
+  - `'fbdev'`  — Pi runtime. `FbdevRunner` writes to `/dev/fb0`
+    via mmap + Pillow, bypassing SDL.
+- `kitchen_clock/ui/lvgl_window.py` is **deleted**.
+- `pyproject.toml` adds `pillow` as a runtime dependency; `pygame`
+  becomes a host-dev optional dep.
 - `__main__.py` default `--period` is **0.25** (= 4 fps).
 
 ### Pi runtime image (Path A wiring)
@@ -53,13 +55,42 @@ PyGame is the **only** renderer on host dev and on the Pi runtime.
   `pip install` of `firmware/main-unit/` plus `dbus-python`, `bleak`
   (apt has no `bleak` for Trixie).
 - A systemd unit `kitchen-clock.service`:
-  - `Environment=SDL_VIDEODRIVER=kmsdrm` (preferred on Trixie's KMS).
+  - `Environment=KITCHEN_CLOCK_RENDERER=fbdev` (Pi-renderer: write
+    directly to `/dev/fb0` via mmap + Pillow. SDL's pY games video
+    drivers all fail on Trixie armv6 + Pi Zero W — see the **fbdev
+    fork** paragraph below).
   - `WorkingDirectory=/opt/kitchen-clock`.
   - `ExecStart=/opt/kitchen-clock-venv/bin/python -m kitchen_clock`.
   - `User=betocool` (matches the user account on the prepped SD card).
   - `Restart=on-failure`.
   - `After=bluetooth.target network-online.target`,
     `WantedBy=multi-user.target`.
+
+### The fbdev fork (Pi runtime only)
+
+Date: 2026-09-12 (post-`probe-pygame-video-drivers.py` on a real
+Pi Zero W).
+
+The original Path A said SDL's `fbcon` would work; reality on
+Trixie + armv6 is harder:
+
+- `kmsdrm` is compiled into the SDL 2.32 armv6 wheel we have, but
+  it requires GLES via EGL, and Pi Zero W has no GPU; EGL fails
+  with "EGL not initialised".
+- `fbcon` is **not compiled** into the SDL 2.32 armv6 wheel.
+- `x11` and `directfb` need an X server / DirectFB respectively —
+  not realistic for a kiosk.
+
+We therefore run `FbdevRunner` on the Pi: bypass SDL, render to a
+PIL image, blit it onto `/dev/fb0` via mmap. The same surface the
+kernel uses during boot, so this works on any Pi OS flavour that
+exposes a linear RGB framebuffer (`virtual_size`, `bits_per_pixel`,
+`stride` from `/sys/class/graphics/fb0`).
+
+Tests stay SDL-free. The host dev loop continues to use
+`PygameRunner`. The dispatcher defaults to `'fbdev'` because the
+canonical command path is the Pi service unit; host tests override
+it with `KITCHEN_CLOCK_RENDERER=pygame`.
 - The HDMI console text on Trixie (the boot kernel's printk) is
   redacted to `loglevel=3 console=tty3` in `scripts/prep-sdcard.sh`
   so the kernel doesn't repaint the same framebuffer that PyGame is
@@ -71,8 +102,11 @@ PyGame is the **only** renderer on host dev and on the Pi runtime.
 
 ## Consequences
 
-- **One renderer**, one set of widgets. Visual divergence between
-  host dev and Pi runtime is impossible by construction.
+- **Two renderers, one data flow.** `BaseRunner` is unique; the
+  surface that paints results is split (`PygameRunner` vs
+  `FbdevRunner`). Visual divergence is impossible — both runners
+  receive the same `SensorReading` list and produce the same widget
+  tree.
 - **No LVGL wheel bake** required in the pi-gen image. pi-gen
   becomes a single-purpose image assembler (no `lv_cpython`
   toolchain, no fiddling with `libsdl2-dev libudev-dev` for a wheel
@@ -82,13 +116,17 @@ PyGame is the **only** renderer on host dev and on the Pi runtime.
 - **Hot-iteration cost to Pi is zero**: edit on the host, `rsync`,
   `systemctl restart kitchen-clock.service`. No image rebuild, no
   wheel rebuild.
-- **Frame rate is capped at ~3 fps** on Pi Zero W. That is the
-  primary trade-off; for a clock, this is fine. If we ever need
-  smooth animation (e.g., a wind-compass dial), this is the metric
-  to revisit.
+- **Frame rate is ~5-10 fps at 800×480** on Pi Zero W via fbdev.
+  That's a primary trade-off; for a clock, this is fine. If we
+  ever need smooth animation (e.g., a wind-compass dial), this is
+  the metric to revisit.
+- **Path C is gone**: no LVGL, no deprecation alias, no fallback
+  in case SDL ever does ship `fbcon` again on Pi OS.
 - **Future contracts**: if we ever want a more elaborate UI, the
-  failure mode of Path A is "add features to PyGame," not "swap a
-  renderer." Sticking to one tool is cheaper than tracing two.
+  failure mode of Path A is "add widget branches in
+  PygameRunner/FbdevRunner," not "swap a renderer." Sticking to
+  SDL's expectations for the Pi but bypass-SDL for actual blits
+  is cheaper than tracing a third renderer.
 
 ## What we lose
 

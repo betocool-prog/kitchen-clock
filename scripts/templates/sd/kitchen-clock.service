@@ -1,0 +1,45 @@
+[Unit]
+Description=Kitchen Clock — main unit Python app (Path A: fbdev renderer)
+Documentation=https://github.com/anomalyco/kitchen-clock
+After=bluetooth.target network-online.target
+Wants=bluetooth.target network-online.target
+
+[Service]
+Type=simple
+User=betocool
+Group=betocool
+WorkingDirectory=/opt/kitchen-clock
+
+# Path A on the Pi: bypass SDL. SDL 2.32 on Trixie armv6 ships with
+# no working video driver (kmsdrm needs GLES; fbcon isn't compiled
+# in). FbdevRunner writes to /dev/fb0 via mmap and Pillow — same
+# surface the kernel boot splash uses.
+Environment=KITCHEN_CLOCK_RENDERER=fbdev
+Environment=KITCHEN_CLOCK_BLE=live
+
+# Idle at least 1 s after a draw before yielding back to the loop.
+# Useful signal if we ever want to debug latency; otherwise cosmetic.
+ExecStart=/opt/kitchen-clock-venv/bin/python -m kitchen_clock --period 0.25
+
+Restart=on-failure
+RestartSec=5
+
+# Hold a soft cap on memory: fbdev blits are CPU-only, so a Pillow
+# font cache + a framebuffer image + a buffer should all fit under
+# 64 MB resident. Triggered by systemd OOM-killer; only Relevant
+# for nasty memory leaks.
+MemoryHigh=80M
+MemoryMax=160M
+
+# Don't drop kernel printk on the same TTY we'd want to read for
+# debugging. The cmdline has `console=tty3`, so kitchen-clock's
+# stdout/stderr go to tty3 with the systemd journal pulling from
+# them.
+StandardOutput=tty
+StandardError=tty
+TTYPath=/dev/tty3
+TTYReset=yes
+TTYVHangup=yes
+
+[Install]
+WantedBy=multi-user.target

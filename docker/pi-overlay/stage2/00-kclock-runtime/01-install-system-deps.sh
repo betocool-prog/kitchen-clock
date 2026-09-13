@@ -17,12 +17,14 @@ set -euo pipefail
 APT_PACKAGES=(
     python3-pygame
     python3-pil
+    python3-numpy
     libsdl2-image-2.0-0
     libsdl2-ttf-2.0-0
     libsdl2-mixer-2.0-0
     libsdl2-gfx-1.0-0
     libfreetype6
     bluez
+    fonts-dejavu-core
 )
 
 # Avoid installing "Recommends:" — we don't need GUI niceties on

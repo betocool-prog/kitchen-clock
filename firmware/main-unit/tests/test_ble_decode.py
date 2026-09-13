@@ -214,12 +214,17 @@ class TestBLEClientCache(unittest.TestCase):
 
 
 class TestRendererDispatch(unittest.TestCase):
-    """Path A: dispatcher returns PygameRunner unconditionally."""
+    """Path A: dispatcher returns PygameRunner or FbdevRunner by env."""
 
-    def test_default_is_pygame(self):
+    def test_default_is_fbdev(self):
+        # Default (env var unset) → fbdev because the canonical
+        # command path is the Pi service unit. Override → pygame
+        # for host dev.
         from kitchen_clock.ui.window import make_renderer
+        from kitchen_clock.ui.fbdev_window import FbdevRunner
         from kitchen_clock.ui.pygame_window import PygameRunner
-        self.assertIs(make_renderer(), PygameRunner)
+        self.assertIs(make_renderer(), FbdevRunner)
+        self.assertIs(make_renderer("fbdev"), FbdevRunner)
         self.assertIs(make_renderer("pygame"), PygameRunner)
 
     def test_unknown_renderer_raises(self):
@@ -235,6 +240,49 @@ class TestRendererDispatch(unittest.TestCase):
         import importlib
         with self.assertRaises(ImportError):
             importlib.import_module("kitchen_clock.ui.lvgl_window")
+
+    def test_fbdev_window_is_importable(self):
+        # Even with no PIL installed and no /dev/fb0 present, the
+        # module must import. PIL is loaded lazily at __init__.
+        import importlib
+        mod = importlib.import_module("kitchen_clock.ui.fbdev_window")
+        self.assertTrue(hasattr(mod, "FbdevRunner"))
+        self.assertTrue(hasattr(mod, "discover_fb0"))
+        self.assertTrue(hasattr(mod, "rgb_to_framebuffer"))
+
+    def test_rgb_to_framebuffer_32bpp(self):
+        from kitchen_clock.ui.fbdev_window import rgb_to_framebuffer
+        # 1 pixel: red (255, 0, 0).
+        rgb = bytes([255, 0, 0])
+        out = rgb_to_framebuffer(rgb, bpp=32, width=1, height=1)
+        # BGRX X-mask little-endian (Linux KMS default): B byte 0,
+        # G byte 1, R byte 2, X byte 3.
+        self.assertEqual(out, bytes([0x00, 0x00, 0xFF, 0x00]))
+
+    def test_rgb_to_framebuffer_32bpp_rgbx_override(self):
+        import os
+        from kitchen_clock.ui.fbdev_window import rgb_to_framebuffer
+        old = os.environ.get("KITCHEN_CLOCK_FB_BYTE_ORDER")
+        os.environ["KITCHEN_CLOCK_FB_BYTE_ORDER"] = "RGBX"
+        try:
+            rgb = bytes([255, 0, 0])
+            out = rgb_to_framebuffer(rgb, bpp=32, width=1, height=1)
+            # RGBX: R byte 0, G byte 1, B byte 2, X byte 3.
+            self.assertEqual(out, bytes([0xFF, 0x00, 0x00, 0x00]))
+        finally:
+            if old is None:
+                os.environ.pop("KITCHEN_CLOCK_FB_BYTE_ORDER", None)
+            else:
+                os.environ["KITCHEN_CLOCK_FB_BYTE_ORDER"] = old
+
+    def test_rgb_to_framebuffer_16bpp(self):
+        from kitchen_clock.ui.fbdev_window import rgb_to_framebuffer
+        rgb = bytes([255, 0, 0])
+        out = rgb_to_framebuffer(rgb, bpp=16, width=1, height=1)
+        # RGB565 with r=255 (max), g=0, b=0:
+        #   v = ((255 & 0xF8) << 8) | ((0 & 0xFC) << 3) | (0 >> 3)
+        #     = 0xF800
+        self.assertEqual(out, bytes([0x00, 0xF8]))
 
 
 if __name__ == "__main__":

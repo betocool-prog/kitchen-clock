@@ -175,11 +175,26 @@ else
         fi
     else
         # root= is already there — top up only the reg-dom hint(s).
-        if ! printf '%s' "$content" | grep -qE 'ieee80211_regdom|80211\.regdom'; then
-            content="${content} cfg80211.ieee80211_regdom=${WIFI_COUNTRY}"
+if ! printf '%s' "$content" | grep -qE 'ieee80211_regdom|80211\.regdom'; then
+        content="${content} cfg80211.ieee80211_regdom=${WIFI_COUNTRY}"
+        APPENDED=1
+        printf 'cmdline.txt: appended cfg80211.ieee80211_regdom=%s\n' "${WIFI_COUNTRY}" >&2
+    fi
+
+    # Three more tokens we always want present:
+    #   console=ttyS0,115200 — UART (GPIO 14/15) login getty stays alive.
+    #   console=tty3          — PyGame stderr / journal target.
+    #   loglevel=3            — suppresses noise on both consoles.
+    for tok in \
+        "console=ttyS0,115200" \
+        "console=tty3" \
+        "loglevel=3"; do
+        if ! grep -qF "$tok" <<< "$content"; then
+            content="${content} ${tok}"
             APPENDED=1
-            printf 'cmdline.txt: appended cfg80211.ieee80211_regdom=%s\n' "${WIFI_COUNTRY}" >&2
+            printf 'cmdline.txt: appended %s\n' "${tok}" >&2
         fi
+    done
     fi
 
     if [[ $APPENDED -eq 1 ]]; then
@@ -314,6 +329,36 @@ GETTY_LINKDIR="${MNT_ROOT}/etc/systemd/system/getty.target.wants"
 run install -d -m 0755 "${GETTY_LINKDIR}"
 run ln -sf "/lib/systemd/system/serial-getty@.service" \
     "${GETTY_LINKDIR}/serial-getty@ttyAMA0.service"
+
+# Path A (ADR 0011): drop the kitchen-clock systemd units onto the
+# rootfs and enable them at boot. The unit files come from
+# `scripts/build-sd-bundle.sh` (templates under
+# `scripts/templates/sd/kitchen-clock*.{service,timer}`). We use
+# the standard vanilla `.wants/` directories here — the same
+# pattern as `getty.target.wants/` above. kitchen-clock.service is
+# independent of NetworkManager, so a parallel `multi-user.target.wants/`
+# symlink is the right kick-off (no NM requires/ dance needed).
+KCLOCK_SVC_DIR="${MNT_ROOT}/etc/systemd/system"
+run install -d -m 0755 "${KCLOCK_SVC_DIR}"
+run install -m 0644 \
+    "${BUILD_DIR}/kitchen-clock.service" \
+    "${KCLOCK_SVC_DIR}/kitchen-clock.service"
+run install -m 0644 \
+    "${BUILD_DIR}/kitchen-clock-suppressor.service" \
+    "${KCLOCK_SVC_DIR}/kitchen-clock-suppressor.service"
+run install -m 0644 \
+    "${BUILD_DIR}/kitchen-clock-suppressor.timer" \
+    "${KCLOCK_SVC_DIR}/kitchen-clock-suppressor.timer"
+
+MULTI_WANTS="${KCLOCK_SVC_DIR}/multi-user.target.wants"
+TIMERS_WANTS="${KCLOCK_SVC_DIR}/timers.target.wants"
+run install -d -m 0755 "${MULTI_WANTS}"
+run install -d -m 0755 "${TIMERS_WANTS}"
+run ln -sf "/etc/systemd/system/kitchen-clock.service" \
+    "${MULTI_WANTS}/kitchen-clock.service"
+run ln -sf "/etc/systemd/system/kitchen-clock-suppressor.timer" \
+    "${TIMERS_WANTS}/kitchen-clock-suppressor.timer"
+printf 'rootfs: kitchen-clock systemd units installed + enabled on boot\n' >&2
 
 # ---------------------------------------------------------------------------
 # Summary

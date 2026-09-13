@@ -31,11 +31,28 @@ mkdir -p /opt/kitchen-clock
     'dbus-python>=1.3' \
     'bleak>=0.21'
 
-# Render-system dependency: wlfre work / kmsdrm support. SDL2's
-# `kmsdrm` backend is the default on Trixie.
+# Render-system dependency: SDL2 must be able to bind a video driver.
+# We use `fbcon` (Pi Zero W has no GPU; kmsdrm GLES fails). The
+# Pi OS apt's python3-pygame bundles SDL 2.0.14 with fbcon compiled
+# in; the venv fallback (when this file is run during pi-gen on
+# Bookworm/Trixie) sees this through `--system-site-packages`.
+# Nothing further to install at this step — `apt-get install
+# python3-pygame` (in 01-install-system-deps.sh) is what registers
+# the package on the system path.
 "${VENV}/bin/python" - <<'PY'
 import pygame
 import dbus         # noqa: F401
 import bleak        # noqa: F401
 print("pygame", pygame.__version__, "OK")
 PY
+
+# Path A (ADR 0011) — enable services on boot. stdlib's `ln -sfn`
+# does the equivalent of `systemctl enable` without needing a
+# running systemd. The `files/etc/systemd/system/*` payload of this
+# overlay had already copied the unit/timer files into the chroot.
+mkdir -p /etc/systemd/system/multi-user.target.wants
+mkdir -p /etc/systemd/system/timers.target.wants
+ln -sfn /etc/systemd/system/kitchen-clock.service \
+        /etc/systemd/system/multi-user.target.wants/kitchen-clock.service
+ln -sfn /etc/systemd/system/kitchen-clock-suppressor.timer \
+        /etc/systemd/system/timers.target.wants/kitchen-clock-suppressor.timer

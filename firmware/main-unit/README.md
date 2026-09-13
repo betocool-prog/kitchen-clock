@@ -1,84 +1,114 @@
 # Main unit — firmware (Pi app)
 
-Python 3.12 + PyGame. Path A — same code on host dev and Pi runtime.
-See `docs/decisions/0011-pygame-on-pi-runtime.md`.
+Python 3.13 + Pillow on the Pi, PyGame on host dev. Path A — renderers
+split by Environment at runtime so we don't carry the SDL dependency on
+the small armv6 Pi. See `docs/decisions/0011-pygame-on-pi-runtime.md`,
+specifically the "fbdev fork" paragraph.
 
 ## Layout
 
 ```
 firmware/main-unit/
 ├── pyproject.toml
-├── README.md                                (this file)
+├── README.md                                   (this file)
 ├── kitchen_clock/
 │   ├── __init__.py
-│   ├── __main__.py                          (entry: `python -m kitchen_clock`)
+│   ├── __main__.py                             (entry: `python -m kitchen_clock`)
 │   ├── config/
 │   │   ├── __init__.py
-│   │   └── sensors.py                       (bonded peer registry; kclock-d0/d3)
+│   │   └── sensors.py                          (bonded peer registry; kclock-d0/d3)
 │   ├── ble/
 │   │   ├── __init__.py
-│   │   └── bleak_client.py                  (decode + RealBleakClient + MockBleakClient)
-│   ├── runner.py                            (BaseRunner + concurrent reads + client cache)
+│   │   └── bleak_client.py                     (decode + RealBleakClient + MockBleakClient)
+│   ├── runner.py                               (BaseRunner + concurrent reads + client cache)
 │   └── ui/
 │       ├── __init__.py
-│       ├── window.py                        (Path A: always PyGame)
-│       └── pygame_window.py                 (host dev runner = Pi runner)
+│       ├── window.py                           (dispatcher: 'pygame' or 'fbdev')
+│       ├── pygame_window.py                    (host dev: SDL2 window)
+│       └── fbdev_window.py                     (Pi runtime: /dev/fb0 mmap + PIL)
 └── tests/
     ├── __init__.py
-    └── test_ble_decode.py                   (pure-python unit tests)
+    └── test_ble_decode.py                      (pure-python unit tests)
 ```
 
 ## Env vars
 
-| Var                            | Value              | Effect                                                  |
-| ------------------------------ | ------------------ | ------------------------------------------------------- |
-| `KITCHEN_CLOCK_RENDERER`       | `pygame` (default) | PyGame SDL2 window on host and Pi.                      |
-|                                | anything else      | Raises `ValueError` — Path A has only one renderer.    |
-| `KITCHEN_CLOCK_BLE`            | `mock` (default)   | `MockBleakClient` — synthetic readings, no bluetooth.   |
-|                                | `live`             | `RealBleakClient` — uses host `hci0` over bleak.        |
-| `SDL_VIDEODRIVER`              | `kmsdrm` (Pi)      | Default on Trixie. Pi-only; not needed on the laptop.   |
+| Var                            | Value              | Effect                                                       |
+| ------------------------------ | ------------------ | ------------------------------------------------------------ |
+| `KITCHEN_CLOCK_RENDERER`       | `fbdev` (Pi default)| Direct `/dev/fb0` blit via mmap + Pillow. Bypasses SDL.      |
+|                                | `pygame`           | SDL2 window — host dev only.                                  |
+|                                | anything else      | Raises `ValueError`.                                         |
+| `KITCHEN_CLOCK_BLE`            | `mock` (default)   | `MockBleakClient` — synthetic readings, no bluetooth.        |
+|                                | `live`             | `RealBleakClient` — uses host `hci0` over bleak.             |
 
 CLI flags `--mock`, `--sensor {outdoor|indoor|all}`, `--period <sec>`
-override defaults on the command line. `--period` defaults to
-`0.25` (= 4 fps).
+override defaults on the command line. `--period` defaults to `0.25`
+(= 4 fps).
+
+## Why split renderers
+
+The Pi Zero W Trixie armv6 + pygame 2.6.1 SDL 2.32 wheel lands in
+this state:
+
+| SDL driver | Status |
+| --- | --- |
+| `kmsdrm` | EGL fails — Pi Zero W has no GPU. |
+| `fbcon` | Not compiled into the SDL 2.32 armv6 multi-arch build. |
+| `x11` | No X server. |
+| `directfb` | No DirectFB. |
+| `dummy` | OK (but doesn't render). |
+
+We therefore bypass SDL on the Pi and render directly to the
+framebuffer. The host dev loop keeps PyGame so iteration speed is
+maximised.
 
 ## Running on the host
 
 ```sh
 conda activate kitchen-clock
 
-# iterate with synthetic data; opens a PyGame SDL2 window
-PYTHONPATH=firmware/main-unit python -m kitchen_clock --mock --period 0.25
+# PyGame window on the host laptop (SDL2 backend).
+PYTHONPATH=firmware/main-unit \
+  KITCHEN_CLOCK_RENDERER=pygame \
+    python -m kitchen_clock --mock --period 0.25
 
-# probe the wired kclock-d0 unit via BLE
-PYTHONPATH=firmware/main-unit python -m kitchen_clock --sensor outdoor --period 0.5
-
-# one-shot GATT probe (separate CLI; prints decoded + succeeds-per-characteristic)
-PYTHONPATH=firmware/main-unit python scripts/probe-ble-gatt.py --sensor outdoor --ticks 1
+# Probe the wired kclock-d0 unit via BLE.
+PYTHONPATH=firmware/main-unit \
+  python -m kitchen_clock --sensor outdoor --period 0.5
 ```
 
 ## Running on the Pi
 
-The Pi runs the **same** PyGame renderer, against the **same**
-`kitchen_clock` package. The image-level wiring is in
+```sh
+ssh betocool@192.168.0.49
+ls /dev/fb0 /sys/class/graphics/fb0
+# expected: /dev/fb0 present, virtual_size readable.
+```
+
+`scripts/probe-pygame-video-drivers.py` is the diagnostic you run on
+the Pi **before** rebuilding the venv — see ADR 0011 for the
+rationale of stepping away from `fbcon`.
+
+The image-level wiring is in
 `docker/pi-overlay/stage2/00-kclock-runtime/`:
 
-- apt: `python3-pygame python3-pil libsdl2-image-2.0-0 libsdl2-ttf-2.0-0 libfreetype6 bluez`
-- A venv at `/opt/kitchen-clock-venv` with `pip install dpkg` of this folder + `dbus-python bleak`.
-- `kitchen-clock.service` unit running that venv's Python as `User=betocool`,
-  with `Environment=SDL_VIDEODRIVER=kmsdrm` and `WantedBy=multi-user.target`
-  (`After=bluetooth.target network-online.target`).
+- apt: `python3-pil python3-pygame python3-bluez` (Pillow is the
+  renderer dep; pygame stays for occasional SDL-style probing).
+- A venv at `/opt/kitchen-clock-venv` with `pip install` of
+  `firmware/main-unit/` plus `dbus-python`, `bleak`.
+- `kitchen-clock.service` running that venv's Python as
+  `User=betocool`, with `Environment=KITCHEN_CLOCK_RENDERER=fbdev`,
+  `Restart=on-failure`, `WantedBy=multi-user.target`.
 
 ## Testing
 
 ```sh
-PYTHONPATH=firmware/main-unit python -m unittest discover -s firmware/main-unit/tests -p "test_*.py" -v
+PYTHONPATH=firmware/main-unit python -m unittest discover \
+  -s firmware/main-unit/tests -p "test_*.py" -v
 ```
 
-Pure-python tests; no bluetooth required.
+Pure-python tests; no bluetooth or framebuffer required.
 
-## Path A
+## ADR
 
-PyGame on host and Pi. The same `kitchen_clock` package renders
-either target's display. There is no LVGL wheel build in this
-project. Detailed rationale: `docs/decisions/0011-pygame-on-pi-runtime.md`.
+Detailed rationale is at `docs/decisions/0011-pygame-on-pi-runtime.md`.

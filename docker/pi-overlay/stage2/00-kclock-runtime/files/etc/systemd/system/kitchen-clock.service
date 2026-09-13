@@ -1,5 +1,5 @@
 [Unit]
-Description=Kitchen Clock — main unit Python app (PyGame, Path A)
+Description=Kitchen Clock — main unit Python app (Path A: fbdev renderer)
 Documentation=https://github.com/anomalyco/kitchen-clock
 After=bluetooth.target network-online.target
 Wants=bluetooth.target network-online.target
@@ -10,10 +10,11 @@ User=betocool
 Group=betocool
 WorkingDirectory=/opt/kitchen-clock
 
-# Path A: PyGame talks to the KMS framebuffer via SDL2's `kmsdrm`
-# video driver. On Trixie this is the default; we set it explicitly
-# to keep the wiring discoverable from `systemctl show`.
-Environment=SDL_VIDEODRIVER=kmsdrm
+# Path A on the Pi: bypass SDL. SDL 2.32 on Trixie armv6 ships with
+# no working video driver (kmsdrm needs GLES; fbcon isn't compiled
+# in). FbdevRunner writes to /dev/fb0 via mmap and Pillow — same
+# surface the kernel boot splash uses.
+Environment=KITCHEN_CLOCK_RENDERER=fbdev
 Environment=KITCHEN_CLOCK_BLE=live
 
 # Idle at least 1s after a draw before yielding back to the loop.
@@ -23,9 +24,10 @@ ExecStart=/opt/kitchen-clock-venv/bin/python -m kitchen_clock --period 0.25
 Restart=on-failure
 RestartSec=5
 
-# Hold a soft cap on memory: pygame on a 1 GB RAM target should not
-# exceed ~64 MB resident under normal operation. Triggered by
-# systemd OOM-killer; only Relevant for nasty memory leaks.
+# Hold a soft cap on memory: fbdev blits are CPU-only, so a Pillow
+# font cache + a framebuffer image + a buffer should all fit under
+# 64 MB resident. Triggered by systemd OOM-killer; only Relevant
+# for nasty memory leaks.
 MemoryHigh=80M
 MemoryMax=160M
 

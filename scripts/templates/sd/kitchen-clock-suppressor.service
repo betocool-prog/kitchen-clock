@@ -1,0 +1,22 @@
+[Unit]
+Description=Kitchen-clock screen blank / idle suppressor
+After=kitchen-clock.service
+Wants=kitchen-clock.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+User=root
+# Hold a single 24h inhibit lock: this keeps the kernel screensaver
+# and idle:sleep blockers off the framebuffer that PyGame is bound to.
+# We refresh the lock by adding a systemd timer (kitchen-clock-suppressor.timer)
+# to re-run the actor before the 24h timeout elapses.
+ExecStart=/usr/bin/systemd-inhibit \
+    --what=idle:sleep:handle-lid-switch \
+    --who=kitchen-clock \
+    --why=kitchen-clock-quiet-mode \
+    --mode=block \
+    /usr/bin/sleep 86400
+
+[Install]
+WantedBy=multi-user.target

@@ -118,6 +118,16 @@ chmod 0600 "${BUILD_DIR}/authorized_keys"
 cp "${TEMPLATE_DIR}/kclock-wifi-unblock.service" "${BUILD_DIR}/"
 chmod 0644 "${BUILD_DIR}/kclock-wifi-unblock.service"
 
+# Path A (ADR 0011) — kitchen-clock systemd units. Plain copy
+# (no envsubst; no templating needed beyond the standard droplet
+# pattern underneath /etc/systemd/system/).
+cp "${TEMPLATE_DIR}/kitchen-clock.service" "${BUILD_DIR}/"
+chmod 0644 "${BUILD_DIR}/kitchen-clock.service"
+cp "${TEMPLATE_DIR}/kitchen-clock-suppressor.service" "${BUILD_DIR}/"
+chmod 0644 "${BUILD_DIR}/kitchen-clock-suppressor.service"
+cp "${TEMPLATE_DIR}/kitchen-clock-suppressor.timer" "${BUILD_DIR}/"
+chmod 0644 "${BUILD_DIR}/kitchen-clock-suppressor.timer"
+
 ls -la "${BUILD_DIR}" >&2
 
 echo "Built: ${BUILD_DIR}" >&2
