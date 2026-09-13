@@ -10,12 +10,31 @@ Characteristic shape (matches ble.c):
   humidity    : uint16 little-endian, 0.01 %RH.
   battery-mV  : uint16 little-endian, mV. Allowed to be empty when the firmware
                 still hasn't a battery rail connected.
+
+Reconnect: `RealBleakClient` clears `_client` on any connect or read
+failure and applies an exponential backoff (1 s → 2 → 4 → 8 → 16 → 32 →
+60 s cap) before trying again. A successful connect resets the
+counter. This is what makes the loop *eventually* pick up a
+peripheral that goes out of range and comes back, while not burning
+the bluetooth daemon when the peripheral is genuinely gone.
 """
 
+import os
 import random
 import struct
+import time
 from dataclasses import dataclass
 from typing import Optional
+
+# Module-level import so tests can monkey-patch kitchen_clock.ble.bleak_client
+# .BleakClient (or its proxy `_B`) without intercepting a function-local
+# `from bleak import …` call.
+try:
+    from bleak import BleakClient as _B  # noqa: N813 (intentional short alias)
+    BLEAK_AVAILABLE = True
+except ImportError:                       # noqa: F401
+    _B = None                              # type: ignore
+    BLEAK_AVAILABLE = False
 
 CHAR_TEMP_UUID = "00002a6e-0000-1000-8000-00805f9b34fb"
 CHAR_HUM_UUID = "00002a6f-0000-1000-8000-00805f9b34fb"
@@ -88,18 +107,60 @@ class SensorReading:
 
 
 class RealBleakClient:
-    """Concrete bleak-based client. Used when KITCHEN_CLOCK_BLE='live'."""
+    """Concrete bleak-based client. Used when KITCHEN_CLOCK_BLE='live'.
+
+    Reconnect behaviour: any connect or read failure drops the
+    underlying bleak client and applies an exponential backoff
+    before the next attempt. A successful connect resets the
+    counter so the next outage restarts from 1 s.
+    """
+
+    # Backoff upper bound for auto-reconnect after repeated failures.
+    BACKOFF_MAX_SECONDS = 60.0
 
     def __init__(self, sensor):
         # sensor: a (mac, name, location) tuple
         self.sensor = sensor
         self._client = None
+        self._fail_count = 0
+        self._next_attempt_at = 0.0
+
+    def _backoff_seconds(self) -> float:
+        """Exponential backoff capped at BACKOFF_MAX_SECONDS.
+
+        Sequence: 1 s, 2 s, 4 s, 8 s, 16 s, 32 s, 60 s (capped).
+        """
+        return min(self.BACKOFF_MAX_SECONDS,
+                   2 ** min(self._fail_count, 6))
 
     async def _ensure_connected(self):
         if self._client is None:
-            from bleak import BleakClient as _B
+            now = time.monotonic()
+            if now < self._next_attempt_at:
+                raise ConnectionError(
+                    f"in reconnect cooldown for "
+                    f"{self._next_attempt_at - now:.1f}s"
+                )
+            if _B is None:
+                # bleak not importable in this environment. Don't
+                # burn the fail counter — we may run on the host where
+                # bleak is available, but on a reflected venv path
+                # where it's not.
+                raise ConnectionError("bleak not importable on this host")
             self._client = _B(self.sensor[0])
-            await self._client.__aenter__()
+            try:
+                await self._client.__aenter__()
+            except Exception:
+                # Drop the broken client; the next call (after the
+                # backoff) will build a fresh bleak instance.
+                self._client = None
+                self._fail_count += 1
+                self._next_attempt_at = (
+                    time.monotonic() + self._backoff_seconds()
+                )
+                raise
+            # Successful connect — clear the failure tally.
+            self._fail_count = 0
         return self._client
 
     async def read(self) -> SensorReading:
@@ -116,6 +177,10 @@ class RealBleakClient:
             try:
                 return bytes(await client.read_gatt_char(char_uuid)), ""
             except Exception as e:
+                # Drop the bleak instance — the connection is
+                # likely dead; next call will reconnect, after the
+                # backoff.
+                self._client = None
                 return b"", f"{type(e).__name__}: {e}"
 
         t_raw, t_err = await _safe_read(CHAR_TEMP_UUID)

@@ -1,6 +1,7 @@
 """Pure-Python tests for the BLE decode pipeline and the runner loop."""
 import asyncio
 import struct
+import time
 import unittest
 from unittest.mock import MagicMock
 
@@ -12,6 +13,14 @@ from kitchen_clock.ble.bleak_client import (
     MockBleakClient,
     RealBleakClient,
     make_client,
+    CHAR_TEMP_UUID,
+    CHAR_HUM_UUID,
+    CHAR_BATTMV_UUID,
+)
+from kitchen_clock.runner import (
+    safe_read,
+    read_all_sensors,
+    BLEClientCache,
 )
 from kitchen_clock.runner import (
     safe_read,
@@ -131,6 +140,137 @@ class TestSafeRead(unittest.TestCase):
         self.assertEqual(r.mac, "ff:ff")
         self.assertEqual(r.location, "outdoor")
         self.assertIn("kaboom", r.source)
+
+
+class TestRealBleakClientReconnect(unittest.TestCase):
+    """RealBleakClient must clear stale state on connect/read failure
+    and apply exponential backoff so the loop recovers when a
+    peripheral comes back into range."""
+
+    SENSOR = ("D0:44:B3:EE:AC:9F", "kclock-d0", "outdoor")
+    CHAR_UUIDS = (CHAR_TEMP_UUID, CHAR_HUM_UUID, CHAR_BATTMV_UUID)
+
+    def setUp(self):
+        import kitchen_clock.ble.bleak_client as mod
+
+        self._mod = mod
+        self._orig_B = mod._B
+
+    def tearDown(self):
+        self._mod._B = self._orig_B
+
+    def _stub_factory(self, aenter_raises=False, read_raises=False):
+        """Build a factory that returns a stub bleak.BleakClient stub.
+
+        The factory is installed as `mod._B`, which is what the
+        production code uses to construct peripherals.
+        """
+        stubs = []   # captured for assertion
+        outer = self
+
+        class _Stub:
+            def __init__(self, mac):
+                self.mac = mac
+                self.aenter_calls = 0
+                self._aenter_raises = aenter_raises
+                self._read_raises = read_raises
+                stubs.append(self)
+
+            async def __aenter__(self):
+                self.aenter_calls += 1
+                if self._aenter_raises:
+                    raise ConnectionError("stub-connection-failed")
+                if not self._read_raises:
+                    self.read_data = (
+                        struct.pack("<h", 2150),
+                        struct.pack("<H", 5500),
+                        struct.pack("<H", 3700),
+                    )
+                return self
+
+            async def __aexit__(self, *_):
+                return None
+
+            async def read_gatt_char(self, char_uuid):
+                if self._read_raises:
+                    raise ConnectionError("not connected")
+                idx = outer.CHAR_UUIDS.index(char_uuid) if char_uuid in outer.CHAR_UUIDS else 0
+                return self.read_data[idx]
+
+        return _Stub, stubs
+
+    def _new_client(self):
+        return RealBleakClient(self.SENSOR)
+
+    def test_aenter_failure_drops_client_and_starts_backoff(self):
+        StubCls, stubs = self._stub_factory(aenter_raises=True)
+        self._mod._B = StubCls
+        rc = self._new_client()
+        before = time.monotonic()
+        with self.assertRaises(ConnectionError) as cm:
+            asyncio.run(rc._ensure_connected())
+        self.assertIn("stub-connection-failed", str(cm.exception))
+        self.assertIsNone(rc._client,
+                          "broken client should be dropped on connect fail")
+        self.assertEqual(rc._fail_count, 1)
+        # Backoff after 1 fail is 2**1 = 2 s.
+        self.assertGreaterEqual(rc._next_attempt_at, before + 2.0 - 0.05)
+        self.assertLessEqual(rc._next_attempt_at, before + 2.0 + 0.05)
+        self.assertEqual(stubs[0].aenter_calls, 1)
+
+    def test_cooldown_blocks_repeats_and_eventually_releases(self):
+        StubCls, _stubs = self._stub_factory(aenter_raises=True)
+        self._mod._B = StubCls
+        rc = self._new_client()
+        # Force a cooldown into the future.
+        rc._fail_count = 1
+        rc._next_attempt_at = time.monotonic() + 600
+        rc._client = None
+        with self.assertRaises(ConnectionError) as cm:
+            asyncio.run(rc._ensure_connected())
+        self.assertIn("in reconnect cooldown", str(cm.exception))
+
+    def test_successful_connect_after_failures_resets_count(self):
+        StubCls, stubs = self._stub_factory(aenter_raises=False)
+        self._mod._B = StubCls
+        rc = self._new_client()
+        rc._fail_count = 5
+        rc._next_attempt_at = 0.0  # allow connect
+        asyncio.run(rc._ensure_connected())
+        self.assertEqual(rc._fail_count, 0,
+                         "successful connect should reset the fail counter")
+        self.assertIsNotNone(rc._client)
+        # The freshly-built stub has been used.
+        self.assertEqual(stubs[-1].aenter_calls, 1)
+
+    def test_read_failure_clears_client_and_rebuilds_on_next_tick(self):
+        StubCls, stubs = self._stub_factory(aenter_raises=False,
+                                            read_raises=True)
+        self._mod._B = StubCls
+        rc = self._new_client()
+        # First read fails.
+        r = asyncio.run(rc.read())
+        self.assertTrue(r.temp_error.startswith("ConnectionError"))
+        self.assertIsNone(rc._client,
+                          "stale bleak client should not be reused after "
+                          "a failed read")
+        # We deliberately don't bump _fail_count on read failures —
+        # the connect path is the one that triggers backoff. A flaky
+        # read shouldn't put the loop into cooldown; a repeated
+        # connection failure will, and that's where backoff is
+        # appropriate.
+        self.assertEqual(rc._fail_count, 0)
+        self.assertEqual(rc._next_attempt_at, 0.0)
+
+    def test_read_passes_through_when_connected(self):
+        StubCls, _ = self._stub_factory(aenter_raises=False,
+                                         read_raises=False)
+        self._mod._B = StubCls
+        rc = self._new_client()
+        r = asyncio.run(rc.read())
+        self.assertAlmostEqual(r.temp_c, 21.5)
+        self.assertAlmostEqual(r.hum_percent, 55.0)
+        self.assertEqual(r.batt_mV, 3700)
 
 
 class TestConcurrentReads(unittest.TestCase):
