@@ -272,6 +272,91 @@ class TestRealBleakClientReconnect(unittest.TestCase):
         self.assertAlmostEqual(r.hum_percent, 55.0)
         self.assertEqual(r.batt_mV, 3700)
 
+    def test_connect_timeout_replaces_aenter_hang(self):
+        """A peripheral that swallows the connect attempt (no reply) should
+        be moved on within CONNECT_TIMEOUT_S, not the bluez default 30 s."""
+
+        class _HangingAenter:
+            def __init__(self, mac):
+                self.mac = mac
+
+            async def __aenter__(self):
+                # Sleep well past the connect timeout; the runner's
+                # wait_for must catch this and surface a
+                # ConnectionError instead of letting the test hang
+                # on the daemon.
+                await asyncio.sleep(RealBleakClient.CONNECT_TIMEOUT_S + 5)
+                return self
+
+            async def __aexit__(self, *_):
+                return None
+
+            async def read_gatt_char(self, _):
+                return b""
+
+        self._mod._B = _HangingAenter
+        rc = self._new_client()
+        t0 = time.monotonic()
+        # Force instant first-attempt (don't bump _fail_count yet).
+        rc._next_attempt_at = 0.0
+        with self.assertRaises(ConnectionError) as cm:
+            asyncio.run(rc._ensure_connected())
+        elapsed = time.monotonic() - t0
+        self.assertIn("connect >", str(cm.exception))
+        self.assertLess(
+            elapsed,
+            RealBleakClient.CONNECT_TIMEOUT_S + 1.0,
+            f"aenter hang should be capped at ~{RealBleakClient.CONNECT_TIMEOUT_S}s, "
+            f"but waited {elapsed:.2f}s",
+        )
+        self.assertIsNone(rc._client, "broken client dropped on timeout")
+        self.assertEqual(rc._fail_count, 1, "timeout increments fail_count")
+        self.assertGreater(
+            rc._next_attempt_at, t0,
+            "backoff schedule applied after timeout",
+        )
+
+    def test_read_timeout_replaces_char_hang(self):
+        """A peripheral that drops mid-GATT should not block the tick."""
+
+        class _HungOnce:
+            def __init__(self, mac):
+                self.mac = mac
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *_):
+                return None
+
+            async def read_gatt_char(self, _):
+                # First temperature read hangs forever, exercise the
+                # wait_for catching it.
+                await asyncio.sleep(RealBleakClient.READ_TIMEOUT_S + 5)
+                return b""
+
+        self._mod._B = _HungOnce
+        rc = self._new_client()
+        rc._next_attempt_at = 0.0
+        t0 = time.monotonic()
+        r = asyncio.run(rc.read())
+        elapsed = time.monotonic() - t0
+        self.assertTrue(
+            r.temp_error.startswith("TimeoutError"),
+            f"hung read should produce TimeoutError, got: {r.temp_error!r}",
+        )
+        # The read() runs three char reads in series, each gated by
+        # READ_TIMEOUT_S, so worst-case is 3 × timeout.
+        budget = 3 * RealBleakClient.READ_TIMEOUT_S + 0.5
+        self.assertLess(
+            elapsed,
+            budget,
+            f"read hang should be capped at ~{budget:.1f}s (3 chars × "
+            f"{RealBleakClient.READ_TIMEOUT_S:.1f}s), but waited "
+            f"{elapsed:.2f}s",
+        )
+        self.assertIsNone(rc._client, "broken client dropped on read timeout")
+
 
 class TestConcurrentReads(unittest.TestCase):
     def test_preserves_input_order(self):
@@ -425,5 +510,129 @@ class TestRendererDispatch(unittest.TestCase):
         self.assertEqual(out, bytes([0x00, 0xF8]))
 
 
-if __name__ == "__main__":
-    unittest.main()
+class TestRunnerRenderCache(unittest.TestCase):
+    """`BaseRunner` keeps a stable `last_readings` so a single failed
+    BLE tick doesn't blank a tile's last live value.
+    """
+
+    class _NullRunner:
+        from kitchen_clock.runner import BaseRunner as _Base
+
+        def __init__(self, sensors):
+            self.sensors = list(sensors)
+            self.period_s = 0.1
+            self.last_readings = [None] * len(sensors)
+            self.current_readings = [None] * len(sensors)
+            self._ble_tick_counter = 0
+
+        # Reuse BaseRunner._tick, but stub the renderer so the
+        # test doesn't import pygame or open /dev/fb0.
+        async def _tick(self):
+            from kitchen_clock.runner import BaseRunner
+            return await BaseRunner._tick(self)
+
+        def _draw(self):
+            pass
+
+    def _reading(self, location, source, T=None, H=None, B=None):
+        r = SensorReading(
+            mac="00:00:00:00:00:00", name="k-" + location, location=location,
+            source=source,
+        )
+        if T is not None:
+            r.raw_temp = struct.pack("<h", int(T * 100))
+        if H is not None:
+            r.raw_hum = struct.pack("<H", int(H * 100))
+        if B is not None:
+            r.raw_batt = struct.pack("<H", int(B))
+        return r
+
+    def test_live_promoted_to_render_cache(self):
+        sensors = [("11", "k1", "outdoor"), ("22", "k2", "indoor")]
+        runner = self._NullRunner(sensors)
+        live_outdoor = self._reading("outdoor", "live", T=21.5, H=40.)
+        live_indoor = self._reading("indoor", "live", T=22.5, H=60.)
+        queued_by_location = {
+            "outdoor": [live_outdoor],
+            "indoor": [live_indoor],
+        }
+        runner.cache = BLEClientCache(
+            lambda s: _StubClient(queued_by_location[s[2]]),
+        )
+
+        asyncio.run(runner._tick())
+        self.assertEqual(runner.current_readings[0].source, "live")
+        self.assertEqual(runner.current_readings[1].source, "live")
+        self.assertAlmostEqual(runner.last_readings[0].temp_c, 21.5)
+        self.assertAlmostEqual(runner.last_readings[1].hum_percent, 60.0)
+
+    def test_failing_tick_keeps_live_cache(self):
+        sensors = [("11", "k1", "outdoor"), ("22", "k2", "indoor")]
+        runner = self._NullRunner(sensors)
+        live_outdoor_v1 = self._reading("outdoor", "live", T=21.5, H=40.)
+        live_indoor_v1 = self._reading("indoor", "live", T=22.5, H=60.)
+        queued = {
+            "outdoor": [live_outdoor_v1],
+            "indoor": [live_indoor_v1],
+        }
+        runner.cache = BLEClientCache(lambda s: _StubClient(queued[s[2]]))
+
+        # First tick: both tiles succeed; cache populated.
+        asyncio.run(runner._tick())
+        self.assertEqual(runner.last_readings[0].temp_c, 21.5)
+        self.assertEqual(runner.last_readings[1].temp_c, 22.5)
+        # Second tick: outdoor fails; indoor succeeds with new values.
+        fail_outdoor = self._reading(
+            "outdoor", "connect-fail:ConnectionError",
+        )
+        new_indoor = self._reading("indoor", "live", T=23.0, H=58.)
+        queued = {
+            "outdoor": [fail_outdoor],
+            "indoor": [new_indoor],
+        }
+        runner.cache = BLEClientCache(lambda s: _StubClient(queued[s[2]]))
+
+        asyncio.run(runner._tick())
+        # current reflects the attempt:
+        self.assertEqual(
+            runner.current_readings[0].source,
+            "connect-fail:ConnectionError",
+        )
+        self.assertEqual(runner.current_readings[1].source, "live")
+        # last_readings is unchanged for the failing sensor:
+        self.assertEqual(
+            runner.last_readings[0].temp_c, 21.5,
+            "outdoor cache should be retained across failure",
+        )
+        # and is updated for the new indoor reading:
+        self.assertEqual(runner.last_readings[1].temp_c, 23.0)
+
+    def test_initial_state_renders_placeholder(self):
+        sensors = [("11", "k1", "outdoor")]
+        runner = self._NullRunner(sensors)
+        fail = self._reading("outdoor", "connect-fail:ConnectionError")
+        runner.cache = BLEClientCache(lambda s: _StubClient([fail]))
+
+        asyncio.run(runner._tick())
+        self.assertIsNone(
+            runner.last_readings[0],
+            "no live reading ever means last_readings[0] stays None",
+        )
+
+
+class _StubClient:
+    """Helper: returns the queued readings, one per read() call."""
+
+    def __init__(self, queue):
+        self._q = list(queue)
+        # Sensor tuple shape: (mac, name, location). Pick the
+        # location off of the first reading so the runner pairing
+        # works without re-keying.
+        first = self._q[0]
+        self.sensor = (first.mac, first.name, first.location)
+
+    async def read(self):
+        return self._q.pop(0)
+
+
+if __name__ == "__main__":    unittest.main()

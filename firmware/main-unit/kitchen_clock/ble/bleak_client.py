@@ -19,6 +19,7 @@ peripheral that goes out of range and comes back, while not burning
 the bluetooth daemon when the peripheral is genuinely gone.
 """
 
+import asyncio
 import os
 import random
 import struct
@@ -113,10 +114,18 @@ class RealBleakClient:
     underlying bleak client and applies an exponential backoff
     before the next attempt. A successful connect resets the
     counter so the next outage restarts from 1 s.
+
+    Timeouts: each bluez round-trip is wrapped in `asyncio.wait_for`
+    so that a peripheral that is silently dropping our packets can't
+    stall the dashboard beyond `CONNECT_TIMEOUT_S` for connect and
+    `READ_TIMEOUT_S` per characteristic. The combination is what
+    keeps BLE ties a tiny read window instead of blocking the render
+    loop on a 30-s bluez internal connect retry.
     """
 
-    # Backoff upper bound for auto-reconnect after repeated failures.
     BACKOFF_MAX_SECONDS = 60.0
+    CONNECT_TIMEOUT_S = 5.0
+    READ_TIMEOUT_S = 2.0
 
     def __init__(self, sensor):
         # sensor: a (mac, name, location) tuple
@@ -142,24 +151,27 @@ class RealBleakClient:
                     f"{self._next_attempt_at - now:.1f}s"
                 )
             if _B is None:
-                # bleak not importable in this environment. Don't
-                # burn the fail counter — we may run on the host where
-                # bleak is available, but on a reflected venv path
-                # where it's not.
                 raise ConnectionError("bleak not importable on this host")
             self._client = _B(self.sensor[0])
             try:
-                await self._client.__aenter__()
-            except Exception:
-                # Drop the broken client; the next call (after the
-                # backoff) will build a fresh bleak instance.
+                await asyncio.wait_for(
+                    self._client.__aenter__(),
+                    timeout=self.CONNECT_TIMEOUT_S,
+                )
+            except (asyncio.TimeoutError, Exception) as e:
+                # TimeoutError from wait_for, or bleak's own connect
+                # exception. Either way: drop the client, bump the
+                # fail counter, apply backoff, re-raise.
                 self._client = None
                 self._fail_count += 1
                 self._next_attempt_at = (
                     time.monotonic() + self._backoff_seconds()
                 )
+                if isinstance(e, asyncio.TimeoutError):
+                    raise ConnectionError(
+                        f"connect > {self.CONNECT_TIMEOUT_S:.0f}s",
+                    ) from e
                 raise
-            # Successful connect — clear the failure tally.
             self._fail_count = 0
         return self._client
 
@@ -175,7 +187,14 @@ class RealBleakClient:
 
         async def _safe_read(char_uuid):
             try:
-                return bytes(await client.read_gatt_char(char_uuid)), ""
+                raw = await asyncio.wait_for(
+                    client.read_gatt_char(char_uuid),
+                    timeout=self.READ_TIMEOUT_S,
+                )
+                return bytes(raw), ""
+            except asyncio.TimeoutError:
+                self._client = None
+                return b"", f"TimeoutError: > {self.READ_TIMEOUT_S:.0f}s"
             except Exception as e:
                 # Drop the bleak instance — the connection is
                 # likely dead; next call will reconnect, after the

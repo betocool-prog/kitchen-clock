@@ -70,13 +70,16 @@ if conda env list | awk '{print $1}' | grep -qx "$ENV_NAME"; then
   pip install --upgrade pip
   # Renderer for the SDL2 window on host = PyGame (works on cp312
   # without compilation). See ADR 0005 / "Renderer strategy".
-  pip install --upgrade 'pygame>=2.5' 'dbus-python>=1.3' 'bleak>=0.21'
+  # `dbus-fast` is a runtime dep of bleak 3.x — the BLE client
+  # imports it lazily on BleakClient(...) construction, so the host
+  # env also needs it for parity with the Pi runtime.
+  pip install --upgrade 'pygame>=2.5' 'dbus-python>=1.3' 'dbus-fast>=2.0' 'bleak>=0.21'
 else
   say "Creating conda env '$ENV_NAME' (Python ${PY_VERSION})."
   conda create -y -n "$ENV_NAME" "python=${PY_VERSION}"
   conda activate "$ENV_NAME"
   pip install --upgrade pip
-  pip install 'pygame>=2.5' 'dbus-python>=1.3' 'bleak>=0.21'
+  pip install 'pygame>=2.5' 'dbus-python>=1.3' 'dbus-fast>=2.0' 'bleak>=0.21'
 fi
 
 # 4. sanity-check
@@ -92,6 +95,7 @@ def v(name):
 
 print("pygame     ", v("pygame"))
 print("dbus-python", v("dbus-python"))
+print("dbus-fast  ", v("dbus-fast"))
 print("bleak      ", v("bleak"))
 
 # Light import smoke test (don't access __version__ — bleak 3.x
@@ -99,8 +103,12 @@ print("bleak      ", v("bleak"))
 # imports cleanly inside this Conda env.
 import pygame    # noqa: F401
 import dbus      # noqa: F401
+import dbus_fast # noqa: F401
 import bleak     # noqa: F401
-print("imports    pygame ✓ dbus ✓ bleak ✓")
+# `from bleak import BleakClient` exercises bleak's lazy dbus_fast
+# import on its constructor — same path as the runtime BLE wire.
+from bleak import BleakClient  # noqa: F401
+print("imports    pygame ✓ dbus ✓ dbus_fast ✓ bleak ✓ BleakClient() constructable")
 PY
 
 say "Host setup complete. Activate with: conda activate $ENV_NAME"

@@ -18,6 +18,8 @@ APT_PACKAGES=(
     python3-pygame
     python3-pil
     python3-numpy
+    python3-dbus
+    python3-dbus-fast
     libsdl2-image-2.0-0
     libsdl2-ttf-2.0-0
     libsdl2-mixer-2.0-0

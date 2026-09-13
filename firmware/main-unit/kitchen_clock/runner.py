@@ -80,6 +80,17 @@ class BaseRunner:
       - per-tick concurrent GATT reads via `read_all_sensors`
       - per-sensor exception fence via `safe_read`
       - BLE-client caching via `BLEClientCache`
+
+    There's a deliberate split between two reading lists:
+
+      `current_readings` — what BLE just returned this tick.
+        Reflects the *attempt*, good or bad. Used by the per-tick
+        journal state line + BLE diag line.
+
+      `last_readings` — last-known-good (source='live' or 'mock')
+        per tile. Used by `_draw()` so a failing peripheral doesn't
+        blank the tile's last successful T/H/B. A tile that has
+        never succeeded stays `None` and renders as `n/a`.
     """
 
     def __init__(self, *, make_client, sensors, period_s: float = 2.0):
@@ -87,14 +98,23 @@ class BaseRunner:
         self.sensors = list(sensors)
         self.period_s = period_s
         self.last_readings: list = [None] * len(self.sensors)
+        self.current_readings: list = [None] * len(self.sensors)
 
     async def _tick(self) -> None:
         import sys
         t0_read = _time.monotonic()
-        self.last_readings = await read_all_sensors(
+        self.current_readings = await read_all_sensors(
             self.sensors, self.cache.client_for,
         )
         t1_read = _time.monotonic()
+        # Promote live/mock fresh readings into the render cache;
+        # leave prior live readings in place for failed attempts so
+        # the panel doesn't blank on a single dropped BLE ack.
+        for i, r in enumerate(self.current_readings):
+            if r is None:
+                continue
+            if r.source in ("live", "mock"):
+                self.last_readings[i] = r
         # Compact one-line BLE state summary — gives journalctl a
         # way to see whether each tile is producing live readings or
         # sitting on connect-fail / per-character errors. Don't roof
@@ -107,7 +127,7 @@ class BaseRunner:
                 f":T={r.temp_c if isinstance(r.temp_c, (int, float)) else '-'}"
                 f":H={r.hum_percent if isinstance(r.hum_percent, (int, float)) else '-'}"
                 f":B={r.batt_mV if isinstance(r.batt_mV, int) else '-'}"
-                for r in self.last_readings
+                for r in self.current_readings if r is not None
             )
             print(
                 f"[BaseRunner] tick #{tick_n} state: {states}",
@@ -118,7 +138,9 @@ class BaseRunner:
         # Highlight non-live / non-mock states with the raw source
         # string sojourners can grep for the full exception at the
         # next layer down (e.g. "ModulationError: ...").
-        for r in self.last_readings:
+        for r in self.current_readings:
+            if r is None:
+                continue
             if r.source not in ("live", "mock"):
                 print(
                     f"[BaseRunner] BLE diag[{r.location}]: "
