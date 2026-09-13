@@ -87,6 +87,10 @@ sudo systemctl enable --now \
     kitchen-clock.service \
     kitchen-clock-suppressor.timer
 
+# Restart even if already running: `enable --now` only starts when
+# the unit is inactive. We always want the latest source loaded.
+sudo systemctl restart kitchen-clock.service
+
 sleep 2  # let the panel paint at least one frame.
 
 echo
