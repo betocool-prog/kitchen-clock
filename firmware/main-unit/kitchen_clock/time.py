@@ -49,21 +49,24 @@ class TimeFormatter:
         return fake_value or datetime.now(self.tz)
 
     def clock(self, fake_value: Optional[datetime] = None) -> str:
-        """HH:MM:SS, optionally prefixed with AM/PM.
+        """HH:MM (no seconds), optionally suffixed with AM/PM.
 
-        12h: "AM 10:42:13" or "PM 03:25:48" — leading AM/PM was the
-        user's choice. The "%I" formatter returns 1-12 with a leading
-        space on values 1-9; we strip that so "AM  9:00:00" never
-        shows a stray space.
-        24h: "13:25:48"
+        12h: "10:42 AM" or "3:25 PM". We drop the seconds because
+        the panel can't update at one-second cadence without the
+        paint/pack timing failing under sustained BLE reads. The
+        clock trades a touch of perception-of-the-second for a
+        usable frame rate — seconds are still visible at the
+        trailing colon flicker if and only if we ever update the
+        panel at >1.5 Hz.
+        24h: "13:25"
         """
         t = self.now(fake_value)
         if self.time_format == "24h":
-            return t.strftime("%H:%M:%S")
+            return t.strftime("%H:%M")
         # 12-hour. %I gives "01"-"12"; trim a leading zero so the
-        # leading-space output reads cleanly.
+        # rect of digits doesn't carry a ghost space.
         hour = t.strftime("%I").lstrip("0") or "12"
-        return f"{t.strftime('%p')} {hour}:{t.strftime('%M:%S')}"
+        return f"{hour}:{t.strftime('%M')} {t.strftime('%p')}"
 
     def date(self, fake_value: Optional[datetime] = None) -> str:
         """Compact, locale-flavoured date row: 'Mon 20 Sep'."""

@@ -43,7 +43,7 @@ class TestClockString(unittest.TestCase):
     def setUp(self):
         self.tf = TimeFormatter(tz_name="Australia/Perth",
                                 time_format="12h")
-        self.fmt_at(self.tf, 2026, 9, 20, 10, 42, 13)
+        self.fmt_at(self.tf, 2026, 9, 20, 10, 42, 0)
 
     def fmt_at(self, tf, y, mo, d, h, mi, s):
         self.fake = datetime(y, mo, d, h, mi, s, tzinfo=AWST)
@@ -51,31 +51,37 @@ class TestClockString(unittest.TestCase):
     def assert_clock(self, expected):
         self.assertEqual(self.tf.clock(self.fake), expected)
 
+    def test_no_seconds_in_format(self):
+        # The clock intentionally drops seconds so the panel paints
+        # at full cadence; we keep this assertion long so the
+        # format regaining seconds trips any regression.
+        self.assert_clock("10:42 AM")
+
+    def test_seconds_in_input_ignored(self):
+        # Seconds in the *input* datetime don't change the
+        # output — we don't render them.
+        self.fmt_at(self.tf, 2026, 9, 20, 10, 42, 59)
+        self.assert_clock("10:42 AM")
+
     def test_am_no_leading_zero(self):
-        # 9 AM should NOT be padded to "09" because leading AM/PM
-        # makes "AM 09:..." look weird.
         self.fmt_at(self.tf, 2026, 9, 20, 9, 0, 0)
-        self.assert_clock("AM 9:00:00")
+        self.assert_clock("9:00 AM")
 
     def test_am_noon_keeps_12(self):
-        # Affirm 12:00:00 reads as "AM 12:00:00" (not "AM 0:00:00").
         self.fmt_at(self.tf, 2026, 9, 20, 0, 0, 0)
-        self.assert_clock("AM 12:00:00")
+        self.assert_clock("12:00 AM")
 
     def test_pm_noon_no_ampm_continuity(self):
-        # 12:00:00 PM is "PM 12:00:00", not "PM 0:00:00".
         self.fmt_at(self.tf, 2026, 9, 20, 12, 0, 0)
-        self.assert_clock("PM 12:00:00")
+        self.assert_clock("12:00 PM")
 
     def test_pm_late(self):
-        self.fmt_at(self.tf, 2026, 9, 20, 22, 5, 9)
-        self.assert_clock("PM 10:05:09")
+        self.fmt_at(self.tf, 2026, 9, 20, 22, 5, 0)
+        self.assert_clock("10:05 PM")
 
     def test_pm_one_digit_hour_trimmed(self):
-        # %I returns "01"-"12"; we trim a leading zero so the
-        # rect of digits doesn't carry a ghost space.
         self.fmt_at(self.tf, 2026, 9, 20, 13, 30, 0)
-        self.assert_clock("PM 1:30:00")
+        self.assert_clock("1:30 PM")
 
 
 class TestClock24h(unittest.TestCase):
@@ -85,11 +91,11 @@ class TestClock24h(unittest.TestCase):
 
     def test_no_ampm_in_24h(self):
         fake = datetime(2026, 9, 20, 13, 25, 48, tzinfo=AWST)
-        self.assertEqual(self.tf.clock(fake), "13:25:48")
+        self.assertEqual(self.tf.clock(fake), "13:25")
 
     def test_midnight_pads_zero(self):
         fake = datetime(2026, 9, 20, 0, 1, 2, tzinfo=AWST)
-        self.assertEqual(self.tf.clock(fake), "00:01:02")
+        self.assertEqual(self.tf.clock(fake), "00:01")
 
 
 class TestDateString(unittest.TestCase):
@@ -116,7 +122,7 @@ class TestTimezone(unittest.TestCase):
     def test_utc_works(self):
         tf = TimeFormatter(tz_name="UTC")
         fake = datetime(2026, 9, 20, 14, 30, 0, tzinfo=ZoneInfo("UTC"))
-        self.assertEqual(tf.clock(fake), "PM 2:30:00")
+        self.assertEqual(tf.clock(fake), "2:30 PM")
         self.assertEqual(tf.date(fake), "Sun 20 Sep")
 
     def test_wrong_zoneinfo_key_raises_at_construction(self):
