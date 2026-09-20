@@ -104,6 +104,30 @@ def load_fonts():
     return fallback, fallback
 
 
+def load_clock_font(size: int = 96):
+    """Sized for the wall-clock face (HH:MM:SS).
+
+    Bigger than `font_big` so the seconds-changed-in-real-time
+    is readable from across the kitchen. We re-resolve the path
+    instead of caching because PIL's `truetype` doesn't expose
+    a cheap sizing API in the version bundled on Trixie.
+    """
+    candidates = (
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+        "/usr/share/fonts/TTF/DejaVuSans-Bold.ttf",
+        "/usr/share/fonts/TTF/LiberationSans-Bold.ttf",
+    )
+    for path in candidates:
+        if not Path(path).exists():
+            continue
+        try:
+            return ImageFont.truetype(path, size)
+        except Exception:
+            continue
+    return ImageFont.load_default()
+
+
 def rgb_to_framebuffer(rgb_bytes: bytes, bpp: int,
                        width: int, height: int) -> bytes:
     """Pack Python RGB bytes into the framebuffer's pixel format.
@@ -201,7 +225,8 @@ def _rgb_to_framebuffer_pure(rgb_bytes: bytes, bpp: int,
 class FbdevRunner(BaseRunner):
     """Path A's fbdev renderer on the Pi runtime."""
 
-    def __init__(self, *, make_client, sensors, period_s: float = 2.0):
+    def __init__(self, *, make_client, sensors, period_s: float = 2.0,
+                 time_formatter=None):
         if Image is None:
             raise RuntimeError(
                 "Pillow (python3-pil) is required for FbdevRunner; "
@@ -226,6 +251,11 @@ class FbdevRunner(BaseRunner):
         self.img = Image.new("RGB", (self.width, self.height), (0, 0, 0))
         self.draw = ImageDraw.Draw(self.img)
         self.font_big, self.font_small = load_fonts()
+        self.time_formatter = time_formatter
+        # Clock face uses larger digits than the body font. Sized so
+        # 'HH:MM:SS' fits the 1024 px panel with margin; must coexist
+        # with the date row directly below.
+        self.font_clock = self._load_clock_font()
 
     async def run(self):
         import sys
@@ -258,6 +288,9 @@ class FbdevRunner(BaseRunner):
             finally:
                 os.close(self.fd)
 
+    def _load_clock_font(self):
+        return load_clock_font(96)
+
     def _draw(self):
         import sys
         print("[FbdevRunner] _draw entered", file=sys.stderr, flush=True)
@@ -265,17 +298,31 @@ class FbdevRunner(BaseRunner):
         self.draw.rectangle(
             (0, 0, self.width, self.height), fill=(0, 0, 0),
         )
-        # Title bar at the top — DejaVuSans-Bold size 48.
-        self.draw.text(
-            (20, 8), "kitchen-clock — library",
-            fill=(255, 255, 255), font=self.font_big,
-        )
+        # Top: BIG AWST clock + date row.
+        # Bottom: vertically stacked sensor tiles.
+        #
         # Layout maths (EastRising 9" panel, 1024x600):
         #   font_big bbox ~74 px  (size 48 + ascent + descent + leading)
         #   font_small bbox ~52 px (size 28 + ascent + descent + leading)
-        #   tile_h = 240 -> generous 30 px gap between tiles.
-        tiles_y = 86
-        tile_h = 240
+        #   font_clock at size 96 has bbox ~150 px.
+        #   clock+date strip = 8 (top margin) + ~150 (clock) + ~6 (gap)
+        #     + ~52 (date) + 8 (gap) = 224 px.
+        #   remaining 600-224 = 376 px for two tiles + a small gap.
+        clock_top_y = 8
+        date_y = 162                    # immediately below the clock
+        clock_face_x = self.width // 2  # we'll right-justify by bbox
+        if self.time_formatter is not None:
+            self._draw_clock(clock_top_y, clock_face_x)
+        else:
+            # Static placeholder when the time formatter isn't
+            # wired up — preserves the project's "kitchen-clock —
+            # library" tagline from before the AWST work.
+            self.draw.text(
+                (20, 8), "kitchen-clock — library",
+                fill=(255, 255, 255), font=self.font_big,
+            )
+        tiles_y = 224
+        tile_h = 180                    # 224 + 180 + 8 + 180 = 592, leaves 8 bottom margin
         for i, r in enumerate(self.last_readings):
             if r is None:
                 continue
@@ -307,11 +354,49 @@ class FbdevRunner(BaseRunner):
         head = f"{r.location or '(unnamed)'} — {r.name or r.mac}  [{r.source}]"
         self.draw.text((x, base_y), head,
                        fill=(255, 255, 255), font=self.font_big)
-        # Offsets measured against DejaVuSans-Bold bbox.
-        # Subtitle bottom ~ y+74; first row starts +12 below.
-        self._draw_line("T", r.temp_c, "°C",   x, base_y + 90)
-        self._draw_line("H", r.hum_percent, "%RH", x, base_y + 142)
-        self._draw_line("B", r.batt_mV, "mV", x, base_y + 194)
+        # Offsets measured against DejaVuSans-Bold bbox + the new
+        # tile_h=180 budget. After baseline-layout for tile_h the
+        # first row sits +70 px below the header, the next two rows
+        # are stacked at +26 px each.
+        self._draw_line("T", r.temp_c, "\u00b0C", x, base_y + 70)
+        self._draw_line("H", r.hum_percent, "%RH", x, base_y + 96)
+        self._draw_line("B", r.batt_mV, "mV", x, base_y + 122)
+
+    def _draw_clock(self, top_y: int, center_x: int) -> None:
+        """Render the wall-clock face and date row.
+
+        Centred horizontally so the seconds change always visible
+        in the kitchen doesn't compete with the tiles for the
+        left edge.
+        """
+        clock_text = self.time_formatter.clock()
+        date_text = self.time_formatter.date()
+        # PIL's `textbbox` lets us measure the glyph extents so we
+        # can right-justify around `center_x` without estimating
+        # Arial-vs-DejaVuSans widths.
+        cx_t, cy_t, cw_t, ch_t = self.draw.textbbox(
+            (0, 0), clock_text, font=self.font_clock,
+        )
+        self.draw.text(
+            (center_x - cw_t // 2, top_y),
+            clock_text,
+            fill=(255, 255, 255),
+            font=self.font_clock,
+        )
+        # Date row directly below the clock, centred to the same
+        # horizontal axis.
+        cx_d, cy_d, cw_d, ch_d = self.draw.textbbox(
+            (0, 0), date_text, font=self.font_big,
+        )
+        # We are already past the clock bbox — `cy_d` is the
+        # ascender; align with our planned date_y rather than
+        # letting the bbox play it loose.
+        self.draw.text(
+            (center_x - cw_d // 2, top_y + 154),
+            date_text,
+            fill=(180, 180, 180),
+            font=self.font_big,
+        )
 
     def _draw_line(self, label, value, unit, x, y):
         if value is None:

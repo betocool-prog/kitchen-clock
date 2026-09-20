@@ -4,11 +4,16 @@ Env vars:
   KITCHEN_CLOCK_RENDERER    — 'pygame' (default). Other values raise;
                               see ADR 0011 (PyGame on host and Pi).
   KITCHEN_CLOCK_BLE         — 'mock' (default) or 'live'.
+  KITCHEN_CLOCK_TIMEZONE    — IANA tz database key, default
+                              'Australia/Perth' (AWST).
+  KITCHEN_CLOCK_TIME_FORMAT — '12h' (default) or '24h'.
 
 CLI flags:
   --mock                    — equivalent: KITCHEN_CLOCK_BLE=mock.
   --sensor <outdoor|indoor|all>
   --period <seconds>
+  --timezone <IANA tz name>
+  --time-format <12h|24h>
 """
 import argparse
 import asyncio
@@ -17,6 +22,7 @@ import sys
 
 from .config import sensors as sensors_mod
 from .ble.bleak_client import make_client
+from .time import TimeFormatter, DEFAULT_TIMEZONE, DEFAULT_TIME_FORMAT
 from .ui.window import make_renderer
 
 
@@ -32,6 +38,13 @@ def main() -> int:
                     help="Filter which bonded sensors to read.")
     ap.add_argument("--period", default=0.25, type=float,
                     help="Period between read cycles in seconds (default: 0.25 = 4 fps).")
+    ap.add_argument("--timezone", default=None,
+                    help="IANA tz database key for the wall-clock "
+                         f"(default: {DEFAULT_TIMEZONE}; respected only "
+                         "if --render-time is not suppressed).")
+    ap.add_argument("--time-format", default=None,
+                    choices=("12h", "24h"),
+                    help="'12h' leading AM/PM (default) or '24h'.")
     args = ap.parse_args()
 
     ble_mode = "mock" if args.mock \
@@ -47,11 +60,21 @@ def main() -> int:
         sys.stderr.write(f"sensor role {args.sensor!r} not in registry\n")
         return 1
 
+    tz_name = args.timezone or os.environ.get(
+        "KITCHEN_CLOCK_TIMEZONE", DEFAULT_TIMEZONE,
+    )
+    tf_format = args.time_format or os.environ.get(
+        "KITCHEN_CLOCK_TIME_FORMAT", DEFAULT_TIME_FORMAT,
+    )
+    time_formatter = TimeFormatter(tz_name=tz_name,
+                                  time_format=tf_format)
+
     renderer_cls = make_renderer()
     runner = renderer_cls(
         make_client=lambda s: make_client(s, mode=ble_mode),
         sensors=sensor_list,
         period_s=args.period,
+        time_formatter=time_formatter,
     )
 
     asyncio.run(runner.run())

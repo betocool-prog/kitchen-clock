@@ -20,16 +20,18 @@ RED = (220, 60, 60)
 
 class PygameRunner(BaseRunner):
     def __init__(self, *, make_client, sensors, period_s: float = 2.0,
-                 surface_size=(WIDTH, HEIGHT)):
+                 surface_size=(WIDTH, HEIGHT), time_formatter=None):
         super().__init__(
             make_client=make_client, sensors=sensors, period_s=period_s,
         )
         self.surface_size = surface_size
+        self.time_formatter = time_formatter
         pygame.init()
         self.screen = pygame.display.set_mode(surface_size)
         pygame.display.set_caption("kitchen-clock dev (pygame)")
         self.font_big = pygame.font.SysFont(None, 36)
         self.font_small = pygame.font.SysFont(None, 22)
+        self.font_clock = pygame.font.SysFont(None, 64)
 
     async def run(self):
         try:
@@ -43,24 +45,43 @@ class PygameRunner(BaseRunner):
 
     def _draw(self):
         self.screen.fill(BLACK)
-        title = self.font_big.render(
-            "kitchen-clock — library", True, WHITE,
-        )
-        self.screen.blit(title, (20, 10))
+        if self.time_formatter is not None:
+            clock = self.font_clock.render(
+                self.time_formatter.clock(), True, WHITE,
+            )
+            self.screen.blit(
+                clock,
+                ((self.surface_size[0] - clock.get_width()) // 2, 8),
+            )
+            date = self.font_big.render(
+                self.time_formatter.date(), True, GREY,
+            )
+            self.screen.blit(
+                date,
+                ((self.surface_size[0] - date.get_width()) // 2, 80),
+            )
+            tiles_y = 130
+            tile_h = 100
+        else:
+            title = self.font_big.render(
+                "kitchen-clock — library", True, WHITE,
+            )
+            self.screen.blit(title, (20, 10))
+            tiles_y = 60
+            tile_h = 110
         for i, r in enumerate(self.last_readings):
             if r is None:
                 continue
-            self._draw_one(r, i)
+            self._draw_one(r, i, base_y=tiles_y + i * tile_h)
         pygame.display.flip()
 
-    def _draw_one(self, r, idx):
+    def _draw_one(self, r, idx, *, base_y=60):
         x = 20
-        y = 60 + idx * 110
         head = f"{r.location or '(unnamed)'} — {r.name or r.mac}  [{r.source}]"
-        self.screen.blit(self.font_big.render(head, True, WHITE), (x, y))
-        self._draw_line("T", r.temp_c, "°C", x, y + 45)
-        self._draw_line("H", r.hum_percent, "%RH", x, y + 70)
-        self._draw_line("B", r.batt_mV, "mV", x, y + 95)
+        self.screen.blit(self.font_big.render(head, True, WHITE), (x, base_y))
+        self._draw_line("T", r.temp_c, "°C", x, base_y + 45)
+        self._draw_line("H", r.hum_percent, "%RH", x, base_y + 70)
+        self._draw_line("B", r.batt_mV, "mV", x, base_y + 95)
 
     def _draw_line(self, label, value, unit, x, y):
         if value is None:
