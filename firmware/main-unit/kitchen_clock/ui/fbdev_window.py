@@ -323,10 +323,15 @@ class FbdevRunner(BaseRunner):
             )
         tiles_y = 224
         tile_h = 180                    # 224 + 180 + 8 + 180 = 592, leaves 8 bottom margin
-        for i, r in enumerate(self.last_readings):
-            if r is None:
-                continue
-            self._draw_one(r, i, base_y=tiles_y + i * tile_h)
+        # Render a tile per registered sensor, even when no live
+        # reading has landed yet. Without this the panel shows
+        # only the clock on a cold start and any BLE outage.
+        for i, sensor in enumerate(self.sensors):
+            last_r = self.last_readings[i] if i < len(self.last_readings) else None
+            cur_r = self.current_readings[i] if i < len(self.current_readings) else None
+            self._draw_tile(
+                sensor, i, last_r, cur_r, base_y=tiles_y + i * tile_h,
+            )
         t_paint = _monotonic()
 
         rgb = self.img.tobytes()
@@ -350,17 +355,39 @@ class FbdevRunner(BaseRunner):
 
     def _draw_one(self, r: SensorReading, idx: int,
                   *, base_y: int = 0) -> None:
+        raise NotImplementedError(
+            "_draw_one is now folded into _draw_tile; the panel"
+        )
+
+    def _draw_tile(self, sensor, idx, last_r, cur_r, *, base_y=0) -> None:
+        """One tile per sensor slot. Always renders, even on cold start.
+
+        \`last_r\` is the last-known-good reading (cached). When it
+        is None we still paint the tile using \`cur_r\`'s source
+        string so the failure is visible on-screen — a black tile
+        in the BLE-down case is harder to triage than one with the
+        connect-fail line.
+        """
+        mac, name, loc = sensor
         x = 20
-        head = f"{r.location or '(unnamed)'} — {r.name or r.mac}  [{r.source}]"
-        self.draw.text((x, base_y), head,
-                       fill=(255, 255, 255), font=self.font_big)
-        # Offsets measured against DejaVuSans-Bold bbox + the new
-        # tile_h=180 budget. After baseline-layout for tile_h the
-        # first row sits +70 px below the header, the next two rows
-        # are stacked at +26 px each.
-        self._draw_line("T", r.temp_c, "\u00b0C", x, base_y + 70)
-        self._draw_line("H", r.hum_percent, "%RH", x, base_y + 96)
-        self._draw_line("B", r.batt_mV, "mV", x, base_y + 122)
+        src = "live" if last_r is not None else (
+            cur_r.source if cur_r is not None else "no-data"
+        )
+        head = f"{loc or '(unnamed)'} \u2014 {name or mac}  [{src}]"
+        self.draw.text(
+            (x, base_y), head,
+            fill=(255, 255, 255), font=self.font_big,
+        )
+        if last_r is None:
+            # No live ever. Show three n/a rows in the failure
+            # colour so the tile reads "the data is not flowing".
+            self._draw_line("T", None, "\u00b0C",   x, base_y + 70)
+            self._draw_line("H", None, "%RH", x, base_y + 96)
+            self._draw_line("B", None, "mV",  x, base_y + 122)
+            return
+        self._draw_line("T", last_r.temp_c, "\u00b0C",   x, base_y + 70)
+        self._draw_line("H", last_r.hum_percent, "%RH", x, base_y + 96)
+        self._draw_line("B", last_r.batt_mV, "mV", x, base_y + 122)
 
     def _draw_clock(self, top_y: int, center_x: int) -> None:
         """Render the wall-clock face and date row.

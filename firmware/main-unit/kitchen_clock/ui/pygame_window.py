@@ -69,19 +69,35 @@ class PygameRunner(BaseRunner):
             self.screen.blit(title, (20, 10))
             tiles_y = 60
             tile_h = 110
-        for i, r in enumerate(self.last_readings):
-            if r is None:
-                continue
-            self._draw_one(r, i, base_y=tiles_y + i * tile_h)
+        for i, sensor in enumerate(self.sensors):
+            last_r = self.last_readings[i] if i < len(self.last_readings) else None
+            cur_r = self.current_readings[i] if i < len(self.current_readings) else None
+            self._draw_tile(
+                sensor, i, last_r, cur_r, base_y=tiles_y + i * tile_h,
+            )
         pygame.display.flip()
 
     def _draw_one(self, r, idx, *, base_y=60):
+        raise NotImplementedError(
+            "_draw_one is now folded into _draw_tile; the panel"
+        )
+
+    def _draw_tile(self, sensor, idx, last_r, cur_r, *, base_y=60):
+        mac, name, loc = sensor
         x = 20
-        head = f"{r.location or '(unnamed)'} — {r.name or r.mac}  [{r.source}]"
+        src = "live" if last_r is not None else (
+            cur_r.source if cur_r is not None else "no-data"
+        )
+        head = f"{loc or '(unnamed)'} \u2014 {name or mac}  [{src}]"
         self.screen.blit(self.font_big.render(head, True, WHITE), (x, base_y))
-        self._draw_line("T", r.temp_c, "°C", x, base_y + 45)
-        self._draw_line("H", r.hum_percent, "%RH", x, base_y + 70)
-        self._draw_line("B", r.batt_mV, "mV", x, base_y + 95)
+        if last_r is None:
+            self._draw_line("T", None, "\u00b0C", x, base_y + 45)
+            self._draw_line("H", None, "%RH", x, base_y + 70)
+            self._draw_line("B", None, "mV", x, base_y + 95)
+            return
+        self._draw_line("T", last_r.temp_c, "\u00b0C", x, base_y + 45)
+        self._draw_line("H", last_r.hum_percent, "%RH", x, base_y + 70)
+        self._draw_line("B", last_r.batt_mV, "mV", x, base_y + 95)
 
     def _draw_line(self, label, value, unit, x, y):
         if value is None:
