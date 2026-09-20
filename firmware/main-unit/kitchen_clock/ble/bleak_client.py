@@ -124,7 +124,7 @@ class RealBleakClient:
     """
 
     BACKOFF_MAX_SECONDS = 60.0
-    CONNECT_TIMEOUT_S = 5.0
+    CONNECT_TIMEOUT_S = 15.0
     READ_TIMEOUT_S = 2.0
 
     def __init__(self, sensor):
@@ -152,7 +152,12 @@ class RealBleakClient:
                 )
             if _B is None:
                 raise ConnectionError("bleak not importable on this host")
-            self._client = _B(self.sensor[0])
+            # Pass timeout= explicitly so bleak's *internal* connect
+            # timeout matches our outer wait_for. Without it bleak
+            # uses 30 s, and on cold-start bluez_scanner state this
+            # means a 5 s outer cancellation always wins — and the
+            # scanner never actually discovers an advertisement.
+            self._client = _B(self.sensor[0], timeout=self.CONNECT_TIMEOUT_S)
             try:
                 await asyncio.wait_for(
                     self._client.__aenter__(),

@@ -169,11 +169,12 @@ class TestRealBleakClientReconnect(unittest.TestCase):
         outer = self
 
         class _Stub:
-            def __init__(self, mac):
+            def __init__(self, mac, **kwargs):
                 self.mac = mac
                 self.aenter_calls = 0
                 self._aenter_raises = aenter_raises
                 self._read_raises = read_raises
+                self.init_kwargs = kwargs
                 stubs.append(self)
 
             async def __aenter__(self):
@@ -277,7 +278,7 @@ class TestRealBleakClientReconnect(unittest.TestCase):
         be moved on within CONNECT_TIMEOUT_S, not the bluez default 30 s."""
 
         class _HangingAenter:
-            def __init__(self, mac):
+            def __init__(self, mac, **kwargs):
                 self.mac = mac
 
             async def __aenter__(self):
@@ -320,7 +321,7 @@ class TestRealBleakClientReconnect(unittest.TestCase):
         """A peripheral that drops mid-GATT should not block the tick."""
 
         class _HungOnce:
-            def __init__(self, mac):
+            def __init__(self, mac, **kwargs):
                 self.mac = mac
 
             async def __aenter__(self):
