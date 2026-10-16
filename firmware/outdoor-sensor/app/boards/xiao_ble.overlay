@@ -67,16 +67,24 @@
 
 /* Battery-rail ADC channel definition. The Pi-side firmware dumps
  * the raw 12-bit SAADC count to BLE; the host panel currently
- * displays it without a unit conversion. A divider formula lives
- * here as the natural place to slot it in, but until that lands
- * the kclock-side value is whatever the pin's voltage puts on
- * the SAADC's AIN7 input.
+ * displays it as `B: NNNN ADC` without a unit conversion.
  *
- * Note on scaling: `ADC_REF_VDD_1_4` divides the reference so the
- * SAADC can read up to 4× VDD on the pin. With the XIAO nRF52840
- * running at 3.3 V from USB (or the LiPo charger rail), this
- * gives us ~0..13.2 V on the pin — well above any single-cell
- * LiPo so the divider formula on the host can stay simple.
+ * Hardware assumption: the kclock PCB carries a 1 MΩ / 510 KΩ
+ * voltage divider on the battery rail, with the partitioned tap
+ * tied to AIN7 (P0.31 / XIAO D7). That ratio is
+ *   R_bottom / R_total = 510 / (1000 + 510) ≈ 0.337
+ * so a single-cell LiPo running 3.0 V → 4.2 V maps to a tap voltage
+ * of 1.01 V → 1.42 V.
+ *
+ * Scale choice: with `gain = ADC_GAIN_1` and `reference =
+ * ADC_REF_VDD_1_2` (Vref = VDD/2 ≈ 1.65 V), full-scale = 1.65 V at
+ * 12 bits = 4095 codes. The 1.01..1.42 V range from a depleted
+ * LiPo to a full charge maps to codes 2509..3524, leaving about
+ * 500 codes of headroom above full charge and 2509 codes below a
+ * drained cell.  Earlier we used VDD/4 (0.825 V full-scale) which
+ * saturated at any LiPo voltage; if the divider ratio ever
+ * changes, the right landing is the one nearest to VDD * a 0.7x
+ * margin above max expected tap voltage.
  */
 &adc {
     #address-cells = <1>;
@@ -85,7 +93,7 @@
     channel@7 {
         reg = <7>;
         zephyr,gain = "ADC_GAIN_1";
-        zephyr,reference = "ADC_REF_VDD_1_4";
+        zephyr,reference = "ADC_REF_VDD_1_2";
         zephyr,acquisition-time = <ADC_ACQ_TIME_DEFAULT>;
         zephyr,input-positive = <NRF_SAADC_AIN7>;
         zephyr,resolution = <12>;
