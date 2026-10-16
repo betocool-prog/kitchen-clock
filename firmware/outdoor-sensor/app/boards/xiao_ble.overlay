@@ -80,21 +80,24 @@
  * reference selector bits for `Internal` (0.6 V bandgap) and
  * `VDD1/4`. Anything finer (VDD/2, VDD/3) and Zephyr's
  * `drivers/adc/adc_nrfx_saadc.c` adapter returns -EINVAL with
- * "Selected ADC reference is not valid". To get an effective
- * full-scale wider than 0.825 V we leverage the SAADC's gain
- * register — with gain = 1/2 and ref = VDD/4 the effective
- * full-scale = Vref / gain = 0.825 / (1/2) = 1.65 V. That's the
- * same envelope we'd have gotten from VDD/2 if the chip had a
- * register for it, but achievable in nRF52840-via-1/2 gain.
+ * "Selected ADC reference is not valid". To widen the effective
+ * full-scale we leverage the SAADC's gain register.
  *
- * The 1.01..1.42 V tap range from a depleted LiPo to a full
- * charge maps to codes 2509..3524, leaving ~570 codes above a
- * full-charge cell and ~2509 below a drained one.
+ * v5: gain = ADC_GAIN_1_6 (enumeration position 0, hardware
+ * register value 0 = factor 1/6, full-scale 4.95 V). Earlier
+ * v3/v4 used gain=1/2 (FS 1.65 V); when v4 reported saturated
+ * 4095 codes at AIN7 it suggested either the divider tap was
+ * connected to a much higher voltage than the user's 1.32 V
+ * bench measurement, or the tap was shorted somewhere. v5 with
+ * gain 1/6 inherently accommodates AIN voltages up to 4.95 V,
+ * so any non-zero, non-saturated reading will tell us the
+ * actual AIN voltage and what's broken.
  *
- * History: an earlier attempt used `gain = 1` and `reference =
- * VDD/2` — the chip reports `-EINVAL: Selected ADC reference
- * is not valid` because that reference has no hardware mapping.
- * v3 uses gain 1/2 to compensate inside the SAADC gain mux.
+ * Code mapping at gain 1/6 + ref VDD/4:
+ *   1.01 V tap (3.0 V battery)  → code ≈  836
+ *   1.32 V tap (3.93 V battery) → code ≈ 1093
+ *   1.42 V tap (4.20 V battery) → code ≈ 1175
+ *   3.30 V (short to VDD)       → code ≈ 2731
  */
 &adc {
     #address-cells = <1>;
@@ -102,7 +105,7 @@
 
     channel@7 {
         reg = <7>;
-        zephyr,gain = "ADC_GAIN_1_2";
+        zephyr,gain = "ADC_GAIN_1_6";
         zephyr,reference = "ADC_REF_VDD_1_4";
         zephyr,acquisition-time = <ADC_ACQ_TIME_DEFAULT>;
         zephyr,input-positive = <NRF_SAADC_AIN7>;

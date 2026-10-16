@@ -8,7 +8,7 @@
 #include "sensor.h"
 
 #ifndef KCLOCK_SENSOR_FW_VERSION
-#define KCLOCK_SENSOR_FW_VERSION "v4"
+#define KCLOCK_SENSOR_FW_VERSION "v5"
 #endif
 
 int main(void)
