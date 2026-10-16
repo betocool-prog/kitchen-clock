@@ -93,11 +93,11 @@ class PygameRunner(BaseRunner):
         if last_r is None:
             self._draw_line("T", None, "\u00b0C", x, base_y + 45)
             self._draw_line("H", None, "%RH", x, base_y + 70)
-            self._draw_line("B", None, "mV", x, base_y + 95)
+            self._draw_line("B", None, "ADC", x, base_y + 95)
             return
         self._draw_line("T", last_r.temp_c, "\u00b0C", x, base_y + 45)
         self._draw_line("H", last_r.hum_percent, "%RH", x, base_y + 70)
-        self._draw_line("B", last_r.batt_mV, "mV", x, base_y + 95)
+        self._draw_line("B", last_r.batt_raw, "ADC", x, base_y + 95)
 
     def _draw_line(self, label, value, unit, x, y):
         if value is None:

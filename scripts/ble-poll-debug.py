@@ -49,7 +49,7 @@ async def poll_one(sensor, *, connect_timeout, char_timeout,
                    keep_open) -> None:
     from bleak import BleakClient
     from kitchen_clock.ble.bleak_client import (
-        decode_temperature, decode_humidity, decode_battery_mv,
+        decode_temperature, decode_humidity, decode_battery_raw,
     )
     mac, name, location = sensor
     t0 = time.monotonic()
@@ -102,8 +102,8 @@ async def poll_one(sensor, *, connect_timeout, char_timeout,
             v = decode_humidity(raw)
             decoded = f"{v:.2f} %RH" if v is not None else "<short>"
         elif label == "B":
-            v = decode_battery_mv(raw)
-            decoded = f"{v} mV" if v is not None else "<short>"
+            v = decode_battery_raw(raw)
+            decoded = f"{v} ADC" if v is not None else "<short>"
         write(f"[{name}] {label}={raw.hex()} ({decoded})")
 
     if not keep_open:

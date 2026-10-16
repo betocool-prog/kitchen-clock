@@ -8,7 +8,7 @@ from unittest.mock import MagicMock
 from kitchen_clock.ble.bleak_client import (
     decode_temperature,
     decode_humidity,
-    decode_battery_mv,
+    decode_battery_raw,
     SensorReading,
     MockBleakClient,
     RealBleakClient,
@@ -59,27 +59,28 @@ class TestDecode(unittest.TestCase):
         self.assertIsNone(decode_humidity(b"\x00"))
 
     def test_battery_3700(self):
-        self.assertEqual(decode_battery_mv(struct.pack("<H", 3700)), 3700)
+        self.assertEqual(decode_battery_raw(struct.pack("<H", 3700)), 3700)
 
     def test_battery_short(self):
-        self.assertIsNone(decode_battery_mv(b""))
-        self.assertIsNone(decode_battery_mv(b"\x00"))
+        self.assertIsNone(decode_battery_raw(b""))
+        self.assertIsNone(decode_battery_raw(b"\x00"))
 
     def test_battery_zero_is_sentinel(self):
-        # Firmware currently reports 0 mV when the ADC divider
-        # isn't wired. The SensorReading property surfaces that
-        # as `None` (i.e. "we don't have a value yet") rather
-        # than a misleading-precise 0 mV.
+        # Firmware currently reports 0 ADC counts when the
+        # divider / ADC pin hasn't reported a meaningful
+        # voltage yet. The SensorReading property surfaces
+        # that as `None` (i.e. "we don't have a value yet")
+        # rather than a misleading-precise 0 ADC.
         r = SensorReading(
             mac="0", name="kclock-x", location="indoor",
             raw_temp=struct.pack("<h", 2150),
             raw_hum=struct.pack("<H", 5500),
             raw_batt=struct.pack("<H", 0),
         )
-        self.assertIsNone(r.batt_mV)
-        # The decoder itself still returns 0 so the underlying
-        # value is recoverable if we ever want to branch on it.
-        self.assertEqual(decode_battery_mv(r.raw_batt), 0)
+        self.assertIsNone(r.batt_raw)
+        # Decoder itself still returns 0 so a future firmware
+        # change that supplies a real reading propagates cleanly.
+        self.assertEqual(decode_battery_raw(r.raw_batt), 0)
 
 
 class TestUuidCanonicalisation(unittest.TestCase):
@@ -123,13 +124,13 @@ class TestUuidCanonicalisation(unittest.TestCase):
         )
         self.assertAlmostEqual(r.temp_c, 21.5)
         self.assertAlmostEqual(r.hum_percent, 55.0)
-        self.assertEqual(r.batt_mV, 3500)
+        self.assertEqual(r.batt_raw, 3500)
 
     def test_sensor_reading_no_data(self):
         r = SensorReading(mac="0", name="kclock-x", location="indoor")
         self.assertIsNone(r.temp_c)
         self.assertIsNone(r.hum_percent)
-        self.assertIsNone(r.batt_mV)
+        self.assertIsNone(r.batt_raw)
 
     def test_sensor_reading_error_path(self):
         r = SensorReading(
@@ -138,7 +139,7 @@ class TestUuidCanonicalisation(unittest.TestCase):
             temp_error="BleakError: timeout",
         )
         self.assertIsNone(r.temp_c)
-        self.assertIsNone(r.batt_mV)
+        self.assertIsNone(r.batt_raw)
 
 
 class TestMockClient(unittest.TestCase):
@@ -159,7 +160,7 @@ class TestMockClient(unittest.TestCase):
         self.assertLess(temp_centi, 2400)
         self.assertGreater(hum_centi, 4500)    # 45.00..58.00 %RH
         self.assertLess(hum_centi, 5800)
-        self.assertEqual(decode_battery_mv(r.raw_batt), 3700)
+        self.assertEqual(decode_battery_raw(r.raw_batt), 3700)
 
     def test_make_client_mock(self):
         c = make_client(("AA:BB:CC:DD:EE:FF", "kclock-z", "indoor"), mode="mock")
@@ -321,7 +322,7 @@ class TestRealBleakClientReconnect(unittest.TestCase):
         r = asyncio.run(rc.read())
         self.assertAlmostEqual(r.temp_c, 21.5)
         self.assertAlmostEqual(r.hum_percent, 55.0)
-        self.assertEqual(r.batt_mV, 3700)
+        self.assertEqual(r.batt_raw, 3700)
 
     def test_connect_timeout_replaces_aenter_hang(self):
         """A peripheral that swallows the connect attempt (no reply) should

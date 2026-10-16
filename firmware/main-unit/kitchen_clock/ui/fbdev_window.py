@@ -383,11 +383,11 @@ class FbdevRunner(BaseRunner):
             # colour so the tile reads "the data is not flowing".
             self._draw_line("T", None, "\u00b0C",   x, base_y + 70)
             self._draw_line("H", None, "%RH", x, base_y + 96)
-            self._draw_line("B", None, "mV",  x, base_y + 122)
+            self._draw_line("B", None, "ADC", x, base_y + 122)
             return
         self._draw_line("T", last_r.temp_c, "\u00b0C",   x, base_y + 70)
         self._draw_line("H", last_r.hum_percent, "%RH", x, base_y + 96)
-        self._draw_line("B", last_r.batt_mV, "mV", x, base_y + 122)
+        self._draw_line("B", last_r.batt_raw, "ADC", x, base_y + 122)
 
     def _draw_clock(self, top_y: int, center_x: int) -> None:
         """Render the wall-clock face and date row.
