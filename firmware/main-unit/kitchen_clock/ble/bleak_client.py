@@ -37,10 +37,17 @@ except ImportError:                       # noqa: F401
     _B = None                              # type: ignore
     BLEAK_AVAILABLE = False
 
+# UUIDs in *bluez-discovery* canonical form (these round-trip through
+# `BleakClient.read_gatt_char(uuid)` and `get_services()`). The
+# firmware-side bytes in `firmware/outdoor-sensor/app/src/ble.c` use
+# the byte-reversed form `6b636c6b-0001-…-0002` because that matches
+# how nrf-connect and other BLE-attribute viewers expose the same
+# 128-bit value. ESS standard 16-bit-assigned UUIDs (T/H) are
+# identical in both forms.
 CHAR_TEMP_UUID = "00002a6e-0000-1000-8000-00805f9b34fb"
 CHAR_HUM_UUID = "00002a6f-0000-1000-8000-00805f9b34fb"
-SVC_KCLOCK_UUID = "6b636c6b-0001-0000-0000-0000-00000001"
-CHAR_BATTMV_UUID = "6b636c6b-0001-0000-0000-0000-00000002"
+SVC_KCLOCK_UUID = "01000000-0000-0000-0000-01006b6c636b"
+CHAR_BATTMV_UUID = "02000000-0000-0000-0000-01006b6c636b"
 
 TEMP_SCALE_C = 100.0   # int16 LE × 0.01 → °C
 HUM_SCALE_RH = 100.0   # uint16 LE × 0.01 → %RH
@@ -104,7 +111,15 @@ class SensorReading:
         if self.batt_error:
             return None
         v = decode_battery_mv(self.raw_batt)
-        return None if v is None else v
+        if v is None:
+            return None
+        # Sentry: firmware returns `0000` when the divider / ADC
+        # pin hasn't reported a meaningful voltage yet. Avoid
+        # marketing that as "0 mV" on the panel — treat it as
+        # "no data yet".
+        if v == 0:
+            return None
+        return v
 
 
 class RealBleakClient:

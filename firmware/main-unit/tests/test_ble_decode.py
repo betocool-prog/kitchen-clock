@@ -15,6 +15,7 @@ from kitchen_clock.ble.bleak_client import (
     make_client,
     CHAR_TEMP_UUID,
     CHAR_HUM_UUID,
+    SVC_KCLOCK_UUID,
     CHAR_BATTMV_UUID,
 )
 from kitchen_clock.runner import (
@@ -63,6 +64,55 @@ class TestDecode(unittest.TestCase):
     def test_battery_short(self):
         self.assertIsNone(decode_battery_mv(b""))
         self.assertIsNone(decode_battery_mv(b"\x00"))
+
+    def test_battery_zero_is_sentinel(self):
+        # Firmware currently reports 0 mV when the ADC divider
+        # isn't wired. The SensorReading property surfaces that
+        # as `None` (i.e. "we don't have a value yet") rather
+        # than a misleading-precise 0 mV.
+        r = SensorReading(
+            mac="0", name="kclock-x", location="indoor",
+            raw_temp=struct.pack("<h", 2150),
+            raw_hum=struct.pack("<H", 5500),
+            raw_batt=struct.pack("<H", 0),
+        )
+        self.assertIsNone(r.batt_mV)
+        # The decoder itself still returns 0 so the underlying
+        # value is recoverable if we ever want to branch on it.
+        self.assertEqual(decode_battery_mv(r.raw_batt), 0)
+
+
+class TestUuidCanonicalisation(unittest.TestCase):
+    """Pin the UUID text we hand to bleak against lead-by-error
+    regressions. The 4 UUIDs were verified on the Pi's actual
+    GATT DB with `bleak`'s `get_services()` -- the canonical
+    textual forms printed here are what bluez stores, not what
+    the firmware bytes look like in C source.
+
+      firmware byte text     bleak canonical
+      ─────────────────────────────────────────
+      6b636c6b-0001-…-0001   01000000-…-01006b6c636b
+      6b636c6b-0001-…-0002   02000000-…-01006b6c636b
+    """
+
+    def test_service_uuid_is_canonical(self):
+        self.assertEqual(
+            SVC_KCLOCK_UUID,
+            "01000000-0000-0000-0000-01006b6c636b",
+        )
+
+    def test_battery_uuid_is_canonical(self):
+        self.assertEqual(
+            CHAR_BATTMV_UUID,
+            "02000000-0000-0000-0000-01006b6c636b",
+        )
+
+    def test_ess_uuids_are_standard(self):
+        # The 16-bit ESS chars are identical in both forms because
+        # the meaningful value lands at byte 2 not 12-15, so the
+        # text is plain.
+        self.assertEqual(CHAR_TEMP_UUID, "00002a6e-0000-1000-8000-00805f9b34fb")
+        self.assertEqual(CHAR_HUM_UUID,  "00002a6f-0000-1000-8000-00805f9b34fb")
 
     def test_sensor_reading_props(self):
         r = SensorReading(
