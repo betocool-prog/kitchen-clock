@@ -7,12 +7,24 @@ per-sensor exception fence.
 Path A (ADR 0011): this file is shared across host (PyGame) and
 Pi runtime (FbdevRunner). It deliberately imports nothing from
 pygame so it stays importable from either side without side-effects.
+
+`BaseRunner` also carries an in-service BLE watchdog: when the
+runner has gone `FAIL_TICK_THRESHOLD` consecutive ticks with
+zero live tiles, the in-process Wi-Fi/Bluetooth stack is
+cycle-restarted via `org.freedesktop.systemd1.Manager.RestartUnit`.
+This catches the "stale `Connected: yes` lockout" symptom we
+saw on the bench without requiring the user to `sudo systemctl
+restart bluetooth.service` by hand.
 """
 import asyncio
 import time as _time
 from typing import Callable, List, Tuple
 
 from .ble.bleak_client import SensorReading
+from .ble.watchdog import (
+    FAIL_TICK_THRESHOLD,
+    maybe_restart_bluetooth,
+)
 
 SensorTuple = Tuple[str, str, str]
 
@@ -80,6 +92,8 @@ class BaseRunner:
       - per-tick concurrent GATT reads via `read_all_sensors`
       - per-sensor exception fence via `safe_read`
       - BLE-client caching via `BLEClientCache`
+      - BLE watchdog: monitor consecutive-fail count, restart
+        `bluetooth.service` via DBus if it crosses the threshold.
 
     There's a deliberate split between two reading lists:
 
@@ -99,6 +113,7 @@ class BaseRunner:
         self.period_s = period_s
         self.last_readings: list = [None] * len(self.sensors)
         self.current_readings: list = [None] * len(self.sensors)
+        self._no_live_ticks: int = 0
 
     async def _tick(self) -> None:
         import sys
@@ -110,11 +125,30 @@ class BaseRunner:
         # Promote live/mock fresh readings into the render cache;
         # leave prior live readings in place for failed attempts so
         # the panel doesn't blank on a single dropped BLE ack.
+        any_live = False
         for i, r in enumerate(self.current_readings):
             if r is None:
                 continue
             if r.source in ("live", "mock"):
                 self.last_readings[i] = r
+                any_live = True
+        # Watchdog bookkeeping: count only ticks where *no* tile
+        # produced a fresh live reading. As soon as one tile lives,
+        # the counter resets — a single good read is enough to keep
+        # us out of the bluetooth.service restart path.
+        if any_live:
+            self._no_live_ticks = 0
+        else:
+            self._no_live_ticks += 1
+        if self._no_live_ticks >= FAIL_TICK_THRESHOLD:
+            try:
+                maybe_restart_bluetooth(self._no_live_ticks)
+            except Exception as exc:
+                print(
+                    f"[BaseRunner] watchdog invocation failed: "
+                    f"{type(exc).__name__}: {exc}",
+                    file=sys.stderr, flush=True,
+                )
         # Compact one-line BLE state summary — gives journalctl a
         # way to see whether each tile is producing live readings or
         # sitting on connect-fail / per-character errors. Don't roof
@@ -126,7 +160,7 @@ class BaseRunner:
                 f"{r.location}={r.source.split(':', 1)[0]}"
                 f":T={r.temp_c if isinstance(r.temp_c, (int, float)) else '-'}"
                 f":H={r.hum_percent if isinstance(r.hum_percent, (int, float)) else '-'}"
-                f":B={r.batt_mV if isinstance(r.batt_mV, int) else '-'}"
+                f":B={r.batt_raw if isinstance(r.batt_raw, int) else '-'}"
                 for r in self.current_readings if r is not None
             )
             print(

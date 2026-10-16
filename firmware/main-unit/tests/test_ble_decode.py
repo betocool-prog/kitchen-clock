@@ -3,7 +3,7 @@ import asyncio
 import struct
 import time
 import unittest
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 from kitchen_clock.ble.bleak_client import (
     decode_temperature,
@@ -564,7 +564,9 @@ class TestRendererDispatch(unittest.TestCase):
 
 class TestRunnerRenderCache(unittest.TestCase):
     """`BaseRunner` keeps a stable `last_readings` so a single failed
-    BLE tick doesn't blank a tile's last live value.
+    BLE tick doesn't blank a tile's last live value. Also exercises
+    the BLE watchdog bookkeeping: a sequence of all-failing ticks
+    triggers `maybe_restart_bluetooth` at the threshold.
     """
 
     class _NullRunner:
@@ -576,6 +578,7 @@ class TestRunnerRenderCache(unittest.TestCase):
             self.last_readings = [None] * len(sensors)
             self.current_readings = [None] * len(sensors)
             self._ble_tick_counter = 0
+            self._no_live_ticks = 0
 
         # Reuse BaseRunner._tick, but stub the renderer so the
         # test doesn't import pygame or open /dev/fb0.
@@ -670,6 +673,132 @@ class TestRunnerRenderCache(unittest.TestCase):
             runner.last_readings[0],
             "no live reading ever means last_readings[0] stays None",
         )
+
+
+class TestRunnerWatchdog(unittest.TestCase):
+    """`BaseRunner` triggers the BLE watchdog after
+    `FAIL_TICK_THRESHOLD` consecutive ticks where no fresh live
+    reading landed. We mock the watchdog itself so a unit-test
+    run doesn't spawn a dbus subprocess.
+    """
+
+    def _NullRunner(self, sensors):
+        from kitchen_clock.runner import BaseRunner
+        from kitchen_clock.ble.bleak_client import SensorReading
+
+        outer = self
+
+        class _Run(BaseRunner):
+            async def _tick(self):
+                return await BaseRunner._tick(self)
+            def _draw(self):
+                pass
+
+        r = _Run(
+            make_client=lambda s: _StubClient_with_self(s, self),
+            sensors=sensors, period_s=0.0,
+        )
+        r.queue = lambda: outer.queue
+        return r
+
+    def setUp(self):
+        self.queue = []
+        # Patch the watchdog module function the runner imports.
+        # The runner imports `maybe_restart_bluetooth` and the
+        # threshold constant from `kitchen_clock.ble.watchdog`.
+        self.patcher = patch("kitchen_clock.runner.maybe_restart_bluetooth")
+        self.mock_watch = self.patcher.start()
+
+    def tearDown(self):
+        self.patcher.stop()
+
+    def _reading(self, location, source, T=None, H=None, B=None):
+        r = SensorReading(
+            mac="00", name="k-" + location, location=location,
+            source=source,
+        )
+        if T is not None:
+            r.raw_temp = struct.pack("<h", int(T * 100))
+        if H is not None:
+            r.raw_hum = struct.pack("<H", int(H * 100))
+        if B is not None:
+            r.raw_batt = struct.pack("<H", int(B))
+        return r
+
+    def test_no_live_ticks_counter_accumulates(self):
+        sensors = [("11", "k-x", "outdoor")]
+        runner = self._NullRunner(sensors)
+        fail = [self._reading("outdoor", "connect-fail:ConnectionError")]
+        runner.cache = BLEClientCache(lambda s: _StubClient(fail))
+        for _ in range(3):
+            asyncio.run(runner._tick())
+        self.assertEqual(runner._no_live_ticks, 3)
+        self.assertEqual(self.mock_watch.call_count, 0,
+            "below threshold no watchdog")
+
+    def test_threshold_invokes_watchdog(self):
+        from kitchen_clock.ble.watchdog import FAIL_TICK_THRESHOLD
+        sensors = [("11", "k-x", "outdoor")]
+        runner = self._NullRunner(sensors)
+        fail = [self._reading("outdoor", "connect-fail:ConnectionError")]
+        runner.cache = BLEClientCache(lambda s: _StubClient(fail))
+        for _ in range(FAIL_TICK_THRESHOLD):
+            asyncio.run(runner._tick())
+        # One invocation right at the threshold crossing.
+        self.assertEqual(self.mock_watch.call_count, 1)
+        self.assertEqual(runner._no_live_ticks, FAIL_TICK_THRESHOLD)
+
+    def test_threshold_invokes_each_tick_above(self):
+        from kitchen_clock.ble.watchdog import FAIL_TICK_THRESHOLD
+        sensors = [("11", "k-x", "outdoor")]
+        runner = self._NullRunner(sensors)
+        fail = [self._reading("outdoor", "connect-fail:ConnectionError")]
+        runner.cache = BLEClientCache(lambda s: _StubClient(fail))
+        for _ in range(FAIL_TICK_THRESHOLD + 2):
+            asyncio.run(runner._tick())
+        # The watchdog fires every tick at or above the threshold
+        # so a sustained outage keeps the python alarm pumping
+        # rather than latching once.
+        self.assertEqual(
+            self.mock_watch.call_count, 3,
+            "3 calls at tick counts 5/6/7 (i.e. threshold + 2 extras)",
+        )
+
+    def test_live_tick_resets_counter(self):
+        from kitchen_clock.ble.watchdog import FAIL_TICK_THRESHOLD
+        sensors = [("11", "k-x", "outdoor")]
+        runner = self._NullRunner(sensors)
+        # run 2 failed ticks first
+        fail_readings = [self._reading("outdoor", "connect-fail:ConnectionError")] * 2
+        runner.cache = BLEClientCache(lambda s: _StubClient(fail_readings))
+        for _ in range(2):
+            asyncio.run(runner._tick())
+        old_calls = self.mock_watch.call_count
+        # A live tick resets the counter and panel rendering captures
+        # the live value.
+        live = self._reading("outdoor", "live", T=21.0, H=50.0)
+        runner.cache = BLEClientCache(lambda s: _StubClient([live]))
+        asyncio.run(runner._tick())
+        self.assertEqual(runner._no_live_ticks, 0)
+        self.assertEqual(self.mock_watch.call_count, old_calls,
+            "live tick did not invoke watchdog beyond what failed ticks already did")
+
+
+class _StubClient_with_self:
+    """Helper for TestRunnerWatchdog that reads from a queue
+    shared with the test method. Mirrors _StubClient's signature.
+    """
+    def __init__(self, sensor, test_self):
+        self._remaining = list(test_self.queue)
+        self.sensor = sensor
+    async def read(self):
+        if not self._remaining:
+            from kitchen_clock.ble.bleak_client import SensorReading
+            return SensorReading(
+                mac="00", name="x", location="x",
+                source="connect-fail:ConnectionError",
+            )
+        return self._remaining.pop(0)
 
 
 class _StubClient:
