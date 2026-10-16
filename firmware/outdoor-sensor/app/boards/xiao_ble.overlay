@@ -78,26 +78,22 @@
  *
  * Scale choice on the nRF52840 SAADC: the hardware only has
  * reference selector bits for `Internal` (0.6 V bandgap) and
- * `VDD1/4`. Anything finer (VDD/2, VDD/3) and Zephyr's
- * `drivers/adc/adc_nrfx_saadc.c` adapter returns -EINVAL with
- * "Selected ADC reference is not valid". To widen the effective
- * full-scale we leverage the SAADC's gain register.
+ * `VDD1/4`. Anything finer and Zephyr's nrfx-saadc adapter
+ * returns -EINVAL. To widen effective full-scale beyond 0.825 V
+ * we leverage the SAADC's gain register:
+ *   gain     = ADC_GAIN_1_6  (enumeration position 0, hardware
+ *                              register value 0 = factor 1/6)
+ *   reference = ADC_REF_VDD_1_4 (Vref = VDD/4 = 0.825 V)
+ *   full-scale = Vref / gain = 0.825 / (1/6) ≈ 4.95 V
  *
- * v5: gain = ADC_GAIN_1_6 (enumeration position 0, hardware
- * register value 0 = factor 1/6, full-scale 4.95 V). Earlier
- * v3/v4 used gain=1/2 (FS 1.65 V); when v4 reported saturated
- * 4095 codes at AIN7 it suggested either the divider tap was
- * connected to a much higher voltage than the user's 1.32 V
- * bench measurement, or the tap was shorted somewhere. v5 with
- * gain 1/6 inherently accommodates AIN voltages up to 4.95 V,
- * so any non-zero, non-saturated reading will tell us the
- * actual AIN voltage and what's broken.
- *
- * Code mapping at gain 1/6 + ref VDD/4:
- *   1.01 V tap (3.0 V battery)  → code ≈  836
- *   1.32 V tap (3.93 V battery) → code ≈ 1093
- *   1.42 V tap (4.20 V battery) → code ≈ 1175
- *   3.30 V (short to VDD)       → code ≈ 2731
+ * Companion GPIO pin: the divider's hi-leg is gated by a MOSFET
+ * that's enabled by driving P0.14 to output-low (per the klock
+ * schematic). Until we drive it low the divider's reference is
+ * pulled to VDD via an internal path, and the SAADC sees 3.3 V
+ * instead of 1.32 V — without dropping the throughput, code
+ * saturates at 4095. The `bat_enable` gpio node below ties that
+ * pin to the sensor layer; sensor.c drives it low before the
+ * SAADC channel setup.
  */
 &adc {
     #address-cells = <1>;
@@ -111,5 +107,26 @@
         zephyr,input-positive = <NRF_SAADC_AIN7>;
         zephyr,resolution = <12>;
         zephyr,oversampling = <0>;
+    };
+};
+
+/* Battery-divider enable: P0.14 is a digital control input on
+ * the kclock PCB that gates the divider's hi-leg MOSFET. We
+ * declare this node under a wrapper that's compatible
+ * "gpio-leds", matching the pattern used by led0/led1/led2 in
+ * xiao_ble_common.dtsi — but renamed to "bat_leds" so the
+ * unused-but-required `&leds` label isn't needed (the board
+ * DTS doesn't expose one).
+ *
+ * sensor.c drives the pin low at boot via
+ *   GPIO_DT_SPEC_GET(DT_NODELABEL(bat_enable), gpios).
+ */
+/ {
+    bat_leds {
+        compatible = "gpio-leds";
+        bat_enable: bat_enable_pin {
+            gpios = <&gpio0 14 GPIO_ACTIVE_HIGH>;
+            label = "Battery divider enable";
+        };
     };
 };

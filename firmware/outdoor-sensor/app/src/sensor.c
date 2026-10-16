@@ -2,6 +2,7 @@
 
 #include <zephyr/device.h>
 #include <zephyr/drivers/adc.h>
+#include <zephyr/drivers/gpio.h>
 #include <zephyr/drivers/sensor.h>
 #include <zephyr/kernel.h>
 #include <zephyr/sys/printk.h>
@@ -16,6 +17,21 @@ static const struct device *const bme280 = DEVICE_DT_GET(DT_ALIAS(bme280));
  */
 #if DT_NODE_HAS_STATUS(DT_PATH(zephyr_user), okay)
 static const struct adc_dt_spec adc_batt = ADC_DT_SPEC_GET(DT_PATH(zephyr_user));
+#endif
+
+/* Battery-divider enable GPIO. Mirrors blinky.c's pattern: a
+ * child node under &leds (gpio-leds compatible) carries a gpios
+ * specifier. We configure it as output and drive low so the
+ * kclock PCB's analog path through the divider MOSFET becomes
+ * active. Pin P0.14 on the XIAO nRF52840.
+ *
+ * If the schematic is a P-MOSFET rather than our sink-side
+ * N-mosfet, replace `gpio_pin_set_dt(&bat_enable, 0)` with
+ * `gpio_pin_set_dt(&bat_enable, 1)` to drive the gate high.
+ */
+#if DT_NODE_HAS_STATUS(DT_NODELABEL(bat_enable), okay)
+static const struct gpio_dt_spec bat_enable =
+    GPIO_DT_SPEC_GET(DT_NODELABEL(bat_enable), gpios);
 #endif
 
 int kclock_sensor_init(void)
@@ -34,6 +50,35 @@ int kclock_sensor_init(void)
     printk("BME280 ready\n");
 #else
     printk("No bme280 alias in devicetree — sensor reads return zeros\n");
+#endif
+
+#if DT_NODE_HAS_STATUS(DT_NODELABEL(bat_enable), okay)
+    /* Enable the divider's analog path before the SAADC setup. The
+     * gpio-leds-compatible node gives us a usable gpio_dt_spec
+     * without needing gpio-hog syntax.
+     */
+    if (!device_is_ready(bat_enable.port)) {
+        printk("BAT-enable GPIO %s.%d not ready — battery reads may be wrong\n",
+               bat_enable.port->name, bat_enable.pin);
+    } else {
+        int err = gpio_pin_configure_dt(&bat_enable, GPIO_OUTPUT);
+        if (err) {
+            printk("BAT-enable GPIO configure failed: %d\n", err);
+        } else {
+            err = gpio_pin_set_dt(&bat_enable, 0);
+            if (err) {
+                printk("BAT-enable GPIO set failed: %d\n", err);
+            } else {
+                printk("BAT-enable GPIO %s.%d -> low\n",
+                       bat_enable.port->name, bat_enable.pin);
+            }
+        }
+    }
+    /* Settle the divider's RC before sampling. */
+    k_msleep(5);
+#else
+    printk("No bat_enable GPIO in devicetree — battery rail must "
+           "be manually enabled\n");
 #endif
 
 #if DT_NODE_HAS_STATUS(DT_PATH(zephyr_user), okay)
