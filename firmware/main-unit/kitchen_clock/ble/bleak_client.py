@@ -214,6 +214,24 @@ class RealBleakClient:
             self._fail_count = 0
         return self._client
 
+    def reset_backoff(self) -> None:
+        """Force-clear the connection-failure state.
+
+        Called by the runner immediately after a `bluetooth.service`
+        restart, so the next `read()` call goes *live* without
+        sitting in cooldown for up-to-60 s. Without this, our
+        cached client's exponential backoff would still hold us out
+        even after the bus-side daemon has come back.
+
+        Cached `_client` reference is invalidated: the next
+        `read()` will build a fresh ble.BleakClient instance so we
+        don't reuse a `_client` object that the daemon-side dbus
+        has deallocated during the service restart.
+        """
+        self._fail_count = 0
+        self._next_attempt_at = 0.0
+        self._client = None
+
     async def read(self) -> SensorReading:
         mac, name, loc = self.sensor
         try:

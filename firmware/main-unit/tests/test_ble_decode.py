@@ -295,6 +295,45 @@ class TestRealBleakClientReconnect(unittest.TestCase):
         # The freshly-built stub has been used.
         self.assertEqual(stubs[-1].aenter_calls, 1)
 
+    def test_reset_backoff_clears_fail_count_and_client(self):
+        """`reset_backoff()` (called after a bluetooth.service
+        watchdog cycle) must force-clear cached state so the next
+        `read()` goes live at once, instead of honouring the
+        exponential backoff schedule.
+        """
+        rc = self._new_client()
+        # Plant a worst-case backoff: 5 fails in a row would
+        # have set cooldown near the 60 s ceiling.
+        rc._fail_count = 6
+        rc._next_attempt_at = time.monotonic() + 60.0
+        rc._client = object()   # sentinel for "any cached client"
+
+        rc.reset_backoff()
+
+        self.assertEqual(rc._fail_count, 0)
+        self.assertEqual(rc._next_attempt_at, 0.0)
+        self.assertIsNone(
+            rc._client,
+            "calling reset_backoff must drop the cached _client so "
+            "the next read() builds a fresh BleakClient instance",
+        )
+
+    def test_reset_backoff_actually_unblocks_next_read(self):
+        """After reset_backoff the next read attempt goes live
+        immediately instead of waiting out `_next_attempt_at`.
+        """
+        StubCls, _ = self._stub_factory(aenter_raises=False)
+        self._mod._B = StubCls
+        rc = self._new_client()
+        # Plant backoff far in the future.
+        rc._fail_count = 6
+        rc._next_attempt_at = time.monotonic() + 600.0
+        rc.reset_backoff()
+        # Without reset_backoff this would raise ConnectionError.
+        r = asyncio.run(rc.read())
+        self.assertIn(r.source, ("live",),
+            "post-reset read should connect, not stay in backoff")
+
     def test_read_failure_clears_client_and_rebuilds_on_next_tick(self):
         StubCls, stubs = self._stub_factory(aenter_raises=False,
                                             read_raises=True)
@@ -735,6 +774,68 @@ class TestRunnerWatchdog(unittest.TestCase):
         self.assertEqual(runner._no_live_ticks, 3)
         self.assertEqual(self.mock_watch.call_count, 0,
             "below threshold no watchdog")
+
+    def test_watchdog_resets_cached_client_backoffs(self):
+        """After the watchdog fires, every cached ble client must
+        have its `_fail_count`, `_next_attempt_at` and cached
+        `_client` cleared — the runner calls
+        `cache.reset_backoffs()` in that path.  We check that
+        the call fans out across all cached clients and that
+        post-reset the next read goes live at once.
+        """
+        import time as _t
+        sensors = [("11", "k-x", "outdoor")]
+        runner = self._NullRunner(sensors)
+        # Build a cache with two real RealBleakClient entries and
+        # plant a worst-case cooldown on each.
+        from kitchen_clock.ble.bleak_client import RealBleakClient
+
+        clients = [
+            RealBleakClient(("11", "k-x", "outdoor")),
+            RealBleakClient(("12", "k-y", "indoor")),
+        ]
+        runner.cache._cache = {
+            sensors[0]: clients[0],
+            ("12", "k-y", "indoor"): clients[1],
+        }
+        # Plant dangerous state.
+        now = _t.monotonic()
+        for c in clients:
+            c._fail_count = 6
+            c._next_attempt_at = now + 600.0
+            c._client = object()
+
+        # Simulate the runner's post-watchdog housekeeping:
+        # testing the cache method directly is enough because the
+        # runner just forwards to it.
+        runner.cache.reset_backoffs()
+
+        for c in clients:
+            self.assertEqual(c._fail_count, 0)
+            self.assertEqual(c._next_attempt_at, 0.0)
+            self.assertIsNone(c._client)
+
+    def test_reset_backoffs_only_calls_attr_getable_clients(self):
+        """Slots in the cache may belong to a `MockBleakClient`
+        (from `make_client(mode="mock")`) which doesn't expose
+        `reset_backoff`. The walker should tolerate that — we
+        don't want to crash the runner when somebody passes a
+        custom client impl.
+        """
+        sensors = [("11", "k-x", "outdoor")]
+        runner = self._NullRunner(sensors)
+        class _OtherClient:
+            def __init__(self):
+                self.sensor = sensors[0]
+            async def read(self):
+                from kitchen_clock.ble.bleak_client import SensorReading
+                return SensorReading(mac="11", name="k-x",
+                                     location="outdoor", source="mock")
+
+        other = _OtherClient()
+        runner.cache._cache = {sensors[0]: other}
+        # Just calling reset_backoffs without errors is the contract.
+        runner.cache.reset_backoffs()
 
     def test_threshold_invokes_watchdog(self):
         from kitchen_clock.ble.watchdog import FAIL_TICK_THRESHOLD

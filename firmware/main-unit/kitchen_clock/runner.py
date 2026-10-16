@@ -77,6 +77,20 @@ class BLEClientCache:
             self._cache[sensor] = self._factory(sensor)
         return self._cache[sensor]
 
+    def reset_backoffs(self) -> None:
+        """Force-clear cached clients' connection-failure state.
+
+        Used right after a `bluetooth.service` restart from the
+        BLE watchdog thread: each cached client still holds
+        `_fail_count > 0` and `_next_attempt_at` in the future
+        otherwise, so even with the daemon-state machinery fresh,
+        our pessimistic cooldown would still keep us out.
+        """
+        for client in self._cache.values():
+            reset = getattr(client, "reset_backoff", None)
+            if callable(reset):
+                reset()
+
     def __len__(self) -> int:
         return len(self._cache)
 
@@ -142,7 +156,14 @@ class BaseRunner:
             self._no_live_ticks += 1
         if self._no_live_ticks >= FAIL_TICK_THRESHOLD:
             try:
-                maybe_restart_bluetooth(self._no_live_ticks)
+                if maybe_restart_bluetooth(self._no_live_ticks):
+                    # After we've asked systemd to cycle
+                    # bluetooth.service, our cached ble clients are
+                    # still in cooldown. Drop their exponential
+                    # backoff and the cached `_client` reference so
+                    # the next read() builds a fresh client and goes
+                    # live at once instead of waiting up to 60 s.
+                    self.cache.reset_backoffs()
             except Exception as exc:
                 print(
                     f"[BaseRunner] watchdog invocation failed: "
