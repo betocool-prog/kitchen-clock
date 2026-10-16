@@ -31,7 +31,7 @@ int main(void)
     /* Take one BME280 sample (best effort); push to GATT. */
     int16_t  temp_centi = 0;
     uint16_t hum_centi   = 0;
-    uint16_t batt_mV     = 0;
+    uint16_t batt_raw    = 0;
 
     if (kclock_sensor_read(&temp_centi, &hum_centi) == 0) {
         printk("sensor: %d.%02d C, %u.%02u %%RH\n",
@@ -40,8 +40,10 @@ int main(void)
     } else {
         printk("sensor: read failed; pushing 0.0 values to GATT\n");
     }
-    kclock_sensor_read_battery_mV(&batt_mV);
-    kclock_ble_set_readings(temp_centi, hum_centi, batt_mV);
+    kclock_sensor_read_battery_raw(&batt_raw);
+    printk("battery: SAADC raw = %u (BLE: 'B: %u ADC' on panel)\n",
+           batt_raw, batt_raw);
+    kclock_ble_set_readings(temp_centi, hum_centi, batt_raw);
 
     kclock_power_init();
 

@@ -24,8 +24,14 @@
  *
  *   Service:        6b 63 6c 6b - 00 01 - 00 00 -
  *                   00 00 - 00 00 00 00 00 01
- *   Battery mV:     6b 63 6c 6b - 00 01 - 00 00 -
+ *   Battery-raw:    6b 63 6c 6b - 00 01 - 00 00 -
  *                   00 00 - 00 00 00 00 00 02
+ *
+ * The "battery-raw" characteristic carries the kclock SAADC reading
+ * (a 12-bit raw count) until we drop in a divider formula and call
+ * it millivolts. The Pi-side panel renders the value without unit
+ * conversion, prefixing it with "B: N ADC" so the user is honest
+ * about what we're shipping.
  *
  * Temperature and Humidity share the same primary service but use
  * the standard Bluetooth SIG Environmental-Sensing-Service
@@ -46,7 +52,7 @@ static const struct bt_uuid_128 kclock_svc_uuid = {
         0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01
     }
 };
-static const struct bt_uuid_128 kclock_batt_mv_uuid = {
+static const struct bt_uuid_128 kclock_batt_raw_uuid = {
     .uuid = { .type = BT_UUID_TYPE_128 },
     .val = {
         0x6b, 0x63, 0x6c, 0x6b, 0x00, 0x01, 0x00, 0x00,
@@ -57,7 +63,7 @@ static const struct bt_uuid_128 kclock_batt_mv_uuid = {
 static char         local_name[KCLOCK_LOCAL_NAME_MAX];
 static int16_t      last_temp_centi;
 static uint16_t     last_hum_centi;
-static uint16_t     last_batt_mV;
+static uint16_t     last_batt_raw;
 
 static ssize_t read_temp_cb(struct bt_conn *conn,
                             const struct bt_gatt_attr *attr,
@@ -80,7 +86,7 @@ static ssize_t read_batt_cb(struct bt_conn *conn,
                             void *buf, uint16_t len, uint16_t offset)
 {
     return bt_gatt_attr_read(conn, attr, buf, len, offset,
-                             &last_batt_mV, sizeof(last_batt_mV));
+                             &last_batt_raw, sizeof(last_batt_raw));
 }
 
 BT_GATT_SERVICE_DEFINE(kclock_svc,
@@ -93,10 +99,10 @@ BT_GATT_SERVICE_DEFINE(kclock_svc,
                            BT_GATT_CHRC_READ,
                            BT_GATT_PERM_READ,
                            read_hum_cb, NULL, &last_hum_centi),
-    BT_GATT_CHARACTERISTIC(&kclock_batt_mv_uuid.uuid,
+    BT_GATT_CHARACTERISTIC(&kclock_batt_raw_uuid.uuid,
                            BT_GATT_CHRC_READ,
                            BT_GATT_PERM_READ,
-                           read_batt_cb, NULL, &last_batt_mV),
+                           read_batt_cb, NULL, &last_batt_raw),
 );
 
 static struct bt_data ad[] = {
@@ -189,11 +195,11 @@ int kclock_ble_init(void)
 
 void kclock_ble_set_readings(int16_t temp_centiC,
                              uint16_t hum_centi,
-                             uint16_t batt_mV)
+                             uint16_t batt_raw)
 {
     last_temp_centi = temp_centiC;
     last_hum_centi  = hum_centi;
-    last_batt_mV    = batt_mV;
+    last_batt_raw   = batt_raw;
 }
 
 void kclock_ble_print_local_name(void)
