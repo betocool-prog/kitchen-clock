@@ -51,8 +51,17 @@ int kclock_sensor_init(void)
                err);
         return 0;
     }
-    printk("SAADC ready: %s, channel %u, gain 1 reference VDD\n",
-           adc_batt.dev->name, (unsigned)adc_batt.channel_id);
+    /* Print the actual gain / reference the Zephyr-side DT
+     * helper resolved so we no longer have to guess from a
+     * fixed string whether the overlay took effect.
+     */
+    printk("SAADC ready: %s channel %u, "
+           "gain enum=%d (1=ADC_GAIN_1, 4=ADC_GAIN_1_2, "
+           "etc.), reference enum=%d\n",
+           adc_batt.dev->name,
+           (unsigned)adc_batt.channel_id,
+           (int)adc_batt.channel_cfg.gain,
+           (int)adc_batt.channel_cfg.reference);
 #else
     printk("No zephyr,user io-channels in devicetree — battery reads "
            "return 0\n");

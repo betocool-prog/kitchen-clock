@@ -7,9 +7,14 @@
 #include "power.h"
 #include "sensor.h"
 
+#ifndef KCLOCK_SENSOR_FW_VERSION
+#define KCLOCK_SENSOR_FW_VERSION "v4"
+#endif
+
 int main(void)
 {
-    printk("kitchen-clock sensor firmware: boot\n");
+    printk("kitchen-clock sensor firmware: boot %s\n",
+           KCLOCK_SENSOR_FW_VERSION);
 
     kclock_mac_print();
 
