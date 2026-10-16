@@ -743,9 +743,9 @@ class TestRunnerWatchdog(unittest.TestCase):
     def setUp(self):
         self.queue = []
         # Patch the watchdog module function the runner imports.
-        # The runner imports `maybe_restart_bluetooth` and the
+        # The runner imports `maybe_reset_ble_locks` and the
         # threshold constant from `kitchen_clock.ble.watchdog`.
-        self.patcher = patch("kitchen_clock.runner.maybe_restart_bluetooth")
+        self.patcher = patch("kitchen_clock.runner.maybe_reset_ble_locks")
         self.mock_watch = self.patcher.start()
 
     def tearDown(self):

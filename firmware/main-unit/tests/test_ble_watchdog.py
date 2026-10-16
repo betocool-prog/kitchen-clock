@@ -1,86 +1,125 @@
 """Tests for the in-service BLE watchdog.
 
-We mock `subprocess.run` so we don't actually call out to
-dbus-send during a unit test. The runner is responsible for
-invoking `maybe_restart_bluetooth` with a count; we test the
-threshold boundary and the shape of the command line that
-would actually run on the Pi.
+We mock `subprocess.run` (and `time.sleep` to keep tests fast)
+so we don't actually call out to bluetoothctl during a unit
+test. The runner is responsible for invoking
+`maybe_reset_ble_locks` with a count; we test the threshold
+boundary and the shape of the command lines that would go to
+bluetoothctl on the Pi.
 """
 import unittest
 from unittest.mock import MagicMock, patch
 
 from kitchen_clock.ble.watchdog import (
     FAIL_TICK_THRESHOLD,
-    maybe_restart_bluetooth,
+    SCAN_OFF_SETTLE_S,
+    maybe_reset_ble_locks,
 )
 
 
 class TestThreshold(unittest.TestCase):
-    """Below threshold → no call. At/above → single call."""
+    """Below threshold → no shell-out. At/above → one shell-out."""
 
     def test_below_threshold_is_idempotent(self):
         for n in range(0, FAIL_TICK_THRESHOLD):
             with patch(
                 "kitchen_clock.ble.watchdog.subprocess.run",
-            ) as mock_run:
-                self.assertFalse(maybe_restart_bluetooth(n))
+            ) as mock_run, patch(
+                "kitchen_clock.ble.watchdog.time.sleep",
+            ):
+                self.assertFalse(maybe_reset_ble_locks(n))
                 mock_run.assert_not_called()
 
-    def test_at_threshold_invokes(self):
+    def test_at_threshold_invokes_reset(self):
         with patch(
             "kitchen_clock.ble.watchdog.subprocess.run",
-        ) as mock_run:
+        ) as mock_run, patch(
+            "kitchen_clock.ble.watchdog.time.sleep",
+        ):
             self.assertTrue(
-                maybe_restart_bluetooth(FAIL_TICK_THRESHOLD),
+                maybe_reset_ble_locks(FAIL_TICK_THRESHOLD),
             )
-            mock_run.assert_called_once()
+            # off + on
+            self.assertEqual(mock_run.call_count, 2)
 
     def test_well_above_threshold_still_invokes(self):
         with patch(
             "kitchen_clock.ble.watchdog.subprocess.run",
-        ) as mock_run:
-            self.assertTrue(maybe_restart_bluetooth(FAIL_TICK_THRESHOLD + 50))
-            mock_run.assert_called_once()
+        ) as mock_run, patch(
+            "kitchen_clock.ble.watchdog.time.sleep",
+        ):
+            self.assertTrue(
+                maybe_reset_ble_locks(FAIL_TICK_THRESHOLD + 50),
+            )
+            self.assertEqual(mock_run.call_count, 2)
 
 
-class TestDbusCommandLine(unittest.TestCase):
-    """Argument shape that would be sent to dbus-send on the Pi."""
+class TestBluetoothctlCommandLine(unittest.TestCase):
+    """Argument shape that would actually run on the Pi."""
 
-    def test_args_match_dbus_spec(self):
+    def test_off_then_on(self):
         with patch(
             "kitchen_clock.ble.watchdog.subprocess.run",
-        ) as mock_run:
-            mock_run.return_value = MagicMock(returncode=0)
-            maybe_restart_bluetooth(FAIL_TICK_THRESHOLD)
-            args = mock_run.call_args[0][0]
-            # Order of arguments is what systemctl equivalent
-            # would be — easy to correlate in journalctl if the
-            # call produces no result.
-            self.assertEqual(args[0], "dbus-send")
-            self.assertIn("--system", args[1:])
-            self.assertIn("--print-reply", args)
-            self.assertIn("--dest=org.freedesktop.systemd1", args)
-            self.assertIn("/org/freedesktop/systemd1", args)
-            self.assertIn(
-                "org.freedesktop.systemd1.Manager.RestartUnit", args,
-            )
-            # The pair of trailing string args:
-            self.assertEqual(
-                args[-2:],
-                ["string:bluetooth.service", "string:fail"],
-            )
+            return_value=MagicMock(returncode=0),
+        ) as mock_run, patch(
+            "kitchen_clock.ble.watchdog.time.sleep",
+        ):
+            maybe_reset_ble_locks(FAIL_TICK_THRESHOLD)
+            args = mock_run.call_args_list
+            self.assertEqual(args[0][0][0], ["bluetoothctl", "scan", "off"])
+            self.assertEqual(args[1][0][0], ["bluetoothctl", "scan", "on"])
 
-    def test_call_does_not_raise_on_subprocess_failure(self):
-        """subprocess.run with check=False would normally still
-        raise in the worst cases (BrokenPipeError, FileNotFoundError)
-        when dbus-send is missing. We must not crash the runner."""
+    def test_settle_sleep_between_off_and_on(self):
         with patch(
             "kitchen_clock.ble.watchdog.subprocess.run",
-            side_effect=FileNotFoundError("dbus-send"),
+        ) as mock_run, patch(
+            "kitchen_clock.ble.watchdog.time.sleep",
+        ) as mock_sleep:
+            self.assertTrue(
+                maybe_reset_ble_locks(FAIL_TICK_THRESHOLD),
+            )
+            # The runner does ONE sleep between off and on.
+            self.assertEqual(mock_sleep.call_count, 1)
+            self.assertAlmostEqual(
+                mock_sleep.call_args.args[0], SCAN_OFF_SETTLE_S,
+                places=6,
+            )
+
+    def test_settle_constant_is_a_finite_number(self):
+        # If we accidentally set SCAN_OFF_SETTLE_S to a runaway
+        # value the system would still self-heal but slowly.
+        # Pin a sane upper bound.
+        self.assertLessEqual(SCAN_OFF_SETTLE_S, 2.5)
+
+
+class TestResilience(unittest.TestCase):
+    """The runner must not crash if bluetoothctl is missing or
+    hangs. The watchdog function swallows the relevant errors and
+    still returns True so caching resets can fire.
+    """
+
+    def test_missing_bluetoothctl_does_not_raise(self):
+        with patch(
+            "kitchen_clock.ble.watchdog.subprocess.run",
+            side_effect=FileNotFoundError("bluetoothctl"),
+        ), patch(
+            "kitchen_clock.ble.watchdog.time.sleep",
         ):
             # Should still return True (attempted) and not raise.
             self.assertTrue(
-                maybe_restart_bluetooth(FAIL_TICK_THRESHOLD),
+                maybe_reset_ble_locks(FAIL_TICK_THRESHOLD),
+            )
+
+    def test_bluetoothctl_timeout_does_not_raise(self):
+        import subprocess as _sub
+        with patch(
+            "kitchen_clock.ble.watchdog.subprocess.run",
+            side_effect=_sub.TimeoutExpired(cmd=["bluetoothctl"], timeout=5),
+        ), patch(
+            "kitchen_clock.ble.watchdog.time.sleep",
+        ):
+            self.assertTrue(
+                maybe_reset_ble_locks(FAIL_TICK_THRESHOLD),
             )
 
 
@@ -88,10 +127,6 @@ class TestThresholdDefault(unittest.TestCase):
     """Pin the threshold default so a regression here is loud."""
 
     def test_threshold_is_five(self):
-        # Decided as ~1.25 s of "every tile connect-failing"
-        # at the default period of 0.25 s. Anything lower would
-        # false-positive during the perennial BLE re-advertise
-        # cycle of peripheral firmware.
         self.assertEqual(FAIL_TICK_THRESHOLD, 5)
 
 

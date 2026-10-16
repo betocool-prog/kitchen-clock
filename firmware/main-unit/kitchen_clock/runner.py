@@ -10,11 +10,11 @@ pygame so it stays importable from either side without side-effects.
 
 `BaseRunner` also carries an in-service BLE watchdog: when the
 runner has gone `FAIL_TICK_THRESHOLD` consecutive ticks with
-zero live tiles, the in-process Wi-Fi/Bluetooth stack is
-cycle-restarted via `org.freedesktop.systemd1.Manager.RestartUnit`.
-This catches the "stale `Connected: yes` lockout" symptom we
-saw on the bench without requiring the user to `sudo systemctl
-restart bluetooth.service` by hand.
+zero live tiles, it cycles BlueZ scanning via
+`bluetoothctl scan off; scan on`. This catches the
+"stale `Connected: yes` lockout" symptom we saw on the bench
+without requiring the user to `sudo systemctl restart
+bluetooth.service` by hand.
 """
 import asyncio
 import time as _time
@@ -23,7 +23,7 @@ from typing import Callable, List, Tuple
 from .ble.bleak_client import SensorReading
 from .ble.watchdog import (
     FAIL_TICK_THRESHOLD,
-    maybe_restart_bluetooth,
+    maybe_reset_ble_locks,
 )
 
 SensorTuple = Tuple[str, str, str]
@@ -156,13 +156,15 @@ class BaseRunner:
             self._no_live_ticks += 1
         if self._no_live_ticks >= FAIL_TICK_THRESHOLD:
             try:
-                if maybe_restart_bluetooth(self._no_live_ticks):
-                    # After we've asked systemd to cycle
-                    # bluetooth.service, our cached ble clients are
-                    # still in cooldown. Drop their exponential
-                    # backoff and the cached `_client` reference so
-                    # the next read() builds a fresh client and goes
-                    # live at once instead of waiting up to 60 s.
+                if maybe_reset_ble_locks(self._no_live_ticks):
+                    # After we've cycled BlueZ scanning, our
+                    # cached ble clients are still pointing at
+                    # d-bus objects the daemon just invalidated,
+                    # plus we're in cooldown. Drop the backoff
+                    # state and the cached `_client` reference so
+                    # the next read() builds a fresh client and
+                    # goes live at once instead of waiting up to
+                    # 60 s.
                     self.cache.reset_backoffs()
             except Exception as exc:
                 print(
