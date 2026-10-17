@@ -191,8 +191,11 @@ So the next steps:
       is unnecessary; cards boot presentable straight from cold).
 - [ ] Migrate the SD-prep workflow into a pi-gen overlay so a
       `dist/kitchen-clock.img` is produced. See ADR `0008`.
-- [ ] Drop `firmware/main-unit/` (Python LVGL app, BLE GATT
-      client) and `sudo systemctl enable --now kitchen-clock.service`.
+- [x] Drop `firmware/main-unit/` (Python fbdev-renderer app,
+      passive-scan BLE client, ADR 0012) and
+      `sudo systemctl enable --now kitchen-clock.service`
+      (deployed via `scripts/deploy-to-pi.sh`; verified live
+      2026-10-17 with both sensor tiles updating).
 - [ ] Move to read-only root filesystem + overlayfs.
 - [ ] Final unit goes into the EastRising panel assembly; see
       `hardware/main-unit/README.md` and ADR `0001-architecture.md`.

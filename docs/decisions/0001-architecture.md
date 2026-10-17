@@ -21,7 +21,7 @@ temperature, humidity and battery voltage over BLE. Constraints:
 
 ## Decision
 
-**Main unit:** Raspberry Pi Zero 2 W (with pre-soldered headers, so the
+**Main unit:** Raspberry Pi Zero WH (Zero W with pre-soldered headers, so the
 5 V / GND pair can be soldered directly to GPIO pins 4 / 6) driving a
 **EastRising ER-TFT090-3-3938** 9" IPS HDMI panel (1024×600, 5 V, no
 touch), held in a 3D-printed bench frame (enclosure designed in
@@ -73,8 +73,9 @@ CAD files.
   the PSU's 2.5 A foldback only. A wiring short on either branch will
   cause the PSU to throttle. No inline slow-blow fuses — see the
   "Power topology" bullet in `docs/bom.md` for the rationale.
-- Pi Zero 2 W's BLE and Wi-Fi share an antenna; two persistent peripheral
-  connections plus Wi-Fi traffic reduce airtime headroom. Staggered
+- Pi Zero W's BLE and Wi-Fi share an antenna; the panel's passive-scan
+  transport (ADR 0012) holds no BLE connections at all, so Wi-Fi
+  keeps full airtime headroom. Staggered
   advertisement intervals (random initial delay per node, 2–5 s base
   interval) and short scan windows keep dropouts rare.
 - No battery backup → on a power return, the Pi re-NTPs and re-fetches

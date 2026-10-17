@@ -12,7 +12,7 @@ Customisations applied on top of `pi-gen`'s `lite` Trixie image:
   `bleak` (apt has no `bleak` for Trixie).
 - The boot cmdline is rewritten in `scripts/prep-sdcard.sh` to
   `loglevel=3 console=tty3` so the kernel printk doesn't repaint
-  the framebuffer that PyGame is bound to.
+  the framebuffer the app's fbdev renderer blits to.
 
 The directory structure here mirrors what pi-gen expects
 (`stage2/`, `stage3/`, etc.). The actual machine is at

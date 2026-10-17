@@ -2,8 +2,8 @@
 
 The indoor kitchen-clock unit:
 
-- **Electronics**: Raspberry Pi Zero 2 W (with pre-soldered headers;
-  GPIO pins 4 and 6 used for the harness) and the EastRising
+- **Electronics**: Raspberry Pi Zero WH (Zero W with pre-soldered
+  headers; GPIO pins 4 and 6 used for the harness) and the EastRising
   ER-TFT090-3-3938 9″ IPS HDMI panel driver board.
 - **Mechanical**: bench frame, designed in **Onshape** by the user
   (see [ADR 0006](../decisions/0006-cad-tooling.md)). The Pi and

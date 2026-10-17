@@ -16,7 +16,7 @@ frame, sensor-unit enclosures) are designed and printed by the user in
 
 | Item | Source | Qty | ~A$ each | Subtotal |
 | --- | --- | --- | --- | --- |
-| Raspberry Pi Zero 2 W (with pre-soldered headers) | [Core CE09937](https://core-electronics.com.au/raspberry-pi-zero-2-w-wireless-soldered-male-headers.html) | 1 | 25 | 25 |
+| Raspberry Pi Zero WH (Zero W with pre-soldered headers) | [Core Zero WH](https://core-electronics.com.au/raspberry-pi-zero-wh.html) | 1 | 30 | 30 |
 | EastRising ER-TFT090-3-3938 (9″ IPS HDMI panel, 5 V, no touch) | [buydisplay.com](https://www.buydisplay.com/9-inch-ips-1024x600-tft-lcd-display-with-hdmi-driver-board-for-raspberry-pi) | 1 | 90 | 90 |
 | mini-HDMI → HDMI cable (Type C → Type A), 1.5 m | [Core FIT0543](https://core-electronics.com.au/mini-hdmi-to-hdmi-cable.html) | 1 | 11 | 11 |
 | Official Raspberry Pi **5.1 V / 2.5 A (12.5 W)** micro-USB PSU | [Core CE08324](https://core-electronics.com.au/official-raspberry-pi-12-5w-micro-usb-power-supply.html) | 1 | 14 | 14 |
@@ -26,15 +26,16 @@ frame, sensor-unit enclosures) are designed and printed by the user in
 | PG7 metal cable gland, IP68 (3–6.5 mm clamping range) | [Altronics H4334](https://www.altronics.com.au/p/h4334-3-6.5mm-eg7-pg7-ip68-metal-cable-gland/) | 1 | 4 | 4 |
 | microSD card, 16 GB, Class 10 | [Core CE04628](https://core-electronics.com.au/sd-microsd-memory-card-16gb-class-10.html) | 1 | 20 | 20 |
 
-**Main unit subtotal: ~A$174**
+**Main unit subtotal: ~A$179**
 
 ## Sensor units (×2, firmware-identical)
 
 Both the indoor and outdoor sensor nodes run the same Zephyr image on
 the same XIAO+BME280+26650 hardware, packaged in the same enclosure
 design. Role ("indoor" / "outdoor" / any custom label) is set on the Pi
-side via `/etc/kitchen-clock/config.toml`. The 26650 cell holder and
-the Li-Ion cell are user-supplied.
+side in the sensor registry
+(`firmware/main-unit/kitchen_clock/config/sensors.py`). The 26650 cell
+holder and the Li-Ion cell are user-supplied.
 
 | Item | Source | Qty | ~A$ each | Subtotal |
 | --- | --- | --- | --- | --- |
@@ -50,7 +51,7 @@ the Li-Ion cell are user-supplied.
 - Jumper wires (AWG22 / AWG24), M2.5 standoffs, heatshrink tubing:
   A$5–10 (incl. freight).
 
-**Total project (retail / BOM-tracked): ~A$249–264**
+**Total project (retail / BOM-tracked): ~A$254–269**
 
 Plus user-supplied 26650 cells + holders + 3D-printed enclosures.
 
@@ -60,15 +61,17 @@ Plus user-supplied 26650 cells + holders + 3D-printed enclosures.
   distributors markup ~30 %. The exact SKU ordered must be the
   **no-touch** option (no `-32XX`/`-33XX` touch suffix) for our
   panel-only frame.
-- Pi Zero 2 W stock has historically been tight; element14 and Core
-  Electronics are the most reliable for AU. We've specced the
-  **pre-soldered male headers** SKU (CE09937) because the harness
-  uses the GPIO header pins 4 (5 V) and 6 (GND) directly.
+- Raspberry Pi Zero WH stock has historically been tight; element14 and
+  Core Electronics are the most reliable for AU. We've specced the
+  **Zero WH** (Zero W with professionally soldered male headers,
+  [Core product page](https://core-electronics.com.au/raspberry-pi-zero-wh.html))
+  because the harness uses the GPIO header pins 4 (5 V) and 6 (GND)
+  directly.
 - For the Seeed XIAO nRF52840, ensure the variant ordered is the
   **Pre-Soldered** SS102010631 (no `Sense` suffix). The `Sense` variant
   adds an extra microphone + IMU without benefit for this project.
 - HDMI cable is **mini-HDMI (Type C) → HDMI (Type A)**, not micro-HDMI.
-  Pi Zero 2 W has a slim mini-HDMI receptacle; ordered wrong is the #1
+  Pi Zero W has a slim mini-HDMI receptacle; ordered wrong is the #1
   "blank panel" gotcha.
 - Lower-cost micro-USB breakout alternative: **Core Electronics CE09239**
   (their own-brand clone, $2.62 inc GST) — same micro-B receptacle with
@@ -76,13 +79,13 @@ Plus user-supplied 26650 cells + holders + 3D-printed enclosures.
   pads that the harness needs for direct AWG22 soldering.
 - Indoor and outdoor sensor units are **identical** firmware and
   hardware. They share the same BOM line items (qty 2). The role each
-  one plays is assigned on the Pi side via
-  `/etc/kitchen-clock/config.toml`; no firmware difference between
-  them. Swap roles later = edit one line in the config.
+  one plays is assigned on the Pi side in the sensor registry
+  (`firmware/main-unit/kitchen_clock/config/sensors.py`); no firmware
+  difference between them. Swap roles later = edit one registry entry.
 - Physical differentiation at deployment: stick a small label (e.g.
   "A" / "B", or "In" / "Out") on each sensor enclosure so the user
   can record which MAC corresponds to which physical location before
-  copying addresses into the config.
+  copying addresses into the registry.
 
 ## Enclosures (managed outside this BOM)
 

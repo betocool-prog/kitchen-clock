@@ -12,7 +12,7 @@ Accepted. Amends the connect/poll halves of
 The panel needs current T/H/B from two battery-powered sensor units.
 ADR 0004 decided: sensors advertise connectable, the Pi opens a GATT
 connection and polls the three characteristics. Two iterations of that
-model on the bench Pi (Zero 2 W, BCM43430A1, BlueZ 5.82) both ended in
+model on the bench Pi (Zero W, BCM43430A1, BlueZ 5.82) both ended in
 multi-hour outages:
 
 - **Hold-the-link model** (pre-2026-10): BlueZ cached a phantom

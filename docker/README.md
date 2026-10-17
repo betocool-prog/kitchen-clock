@@ -13,7 +13,9 @@ Once the Dockerfile is in place:
 docker build -t kitchen-clock-build:latest -f docker/Dockerfile .
 ```
 
-Entry points are the thin shell wrappers under `scripts/`:
+Entry points are the thin shell wrappers under `scripts/` (the image
+itself defaults to an interactive `bash` entrypoint, so the wrappers
+pass their build scripts through `--entrypoint /bin/bash`):
 
 - `scripts/build-sensor.sh` — Zephyr firmware → UF2.
 - `scripts/build-image.sh` — Raspberry Pi OS image → `.img`.

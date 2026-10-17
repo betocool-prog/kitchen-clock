@@ -4,7 +4,13 @@ Date: 2026-08-22
 
 ## Status
 
-Accepted.
+Accepted. The **transport** halves (connect-and-poll, bonding as a
+data-path requirement) were amended on 2026-10-17 by
+[0012 — BLE passive-scan transport](0012-ble-passive-scan-transport.md):
+the panel now reads broadcast advertising payloads and never opens a
+GATT connection; role-on-the-Pi and the registry model below are
+unchanged (the registry lives in
+`firmware/main-unit/kitchen_clock/config/sensors.py`).
 
 ## Context
 
@@ -15,7 +21,7 @@ deployment location, not by firmware. Constraints:
 
 - Sensor units must run for months on 2× AA.
 - Pi has no input device to enter a PIN or pair interactively.
-- The nRF52840 has a robust BLE peripheral stack; the Pi Zero 2 W has a
+- The nRF52840 has a robust BLE peripheral stack; the Pi Zero W has a
   usable BLE host via BlueZ.
 
 Options considered:
@@ -53,6 +59,12 @@ peer; role is decided on the Pi side.**
 
 **Role mapping (on the Pi):** `/etc/kitchen-clock/config.toml` carries a
 list of bonded peers:
+
+> **As built (2026-10-17):** the registry lives in the app package at
+> `firmware/main-unit/kitchen_clock/config/sensors.py` as plain Python
+> tuples — `(mac, name, role)` — deployed to `/opt/kitchen-clock` on
+> the Pi. The TOML shape below is the original sketch, kept for
+> history; the fields carried over unchanged.
 
 ```toml
 [[sensors]]

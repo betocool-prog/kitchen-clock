@@ -2,8 +2,10 @@
 
 Both the indoor and outdoor sensor nodes use the **same hardware** and
 the **same Zephyr firmware image**, deployed twice. Role
-("indoor" / "outdoor" / any custom label) is set on the Pi side in
-`/etc/kitchen-clock/config.toml`, not in firmware.
+("indoor" / "outdoor" / any custom label) is set on the Pi side in the
+sensor registry
+(`firmware/main-unit/kitchen_clock/config/sensors.py`), not in
+firmware.
 
 ## Components
 
@@ -55,8 +57,17 @@ Adequate for a sensor that gets recharged every few months.
 ## Deployment
 
 Two units per project. One indoors, one outdoors. After first flash,
-each unit prints its **last two bytes of public BLE address** to USB
-serial for ~5 s at boot. The deployer records those bytes per unit
-into `/etc/kitchen-clock/config.toml` along with the role each one is
-playing. Reboot the Pi once; both sensors come up bonded and the
-clock UI shows both at the assigned labels.
+each unit advertises as **`kclock-XX`** (XX = the last byte of its
+public BLE address, visible on the UART console's `BLE addr[0]` boot
+line). Discover each unit from the host:
+
+```sh
+bluetoothctl scan on          # 4-5 s
+bluetoothctl scan off
+python scripts/probe-ble-devices.py --filter kclock
+```
+
+then record the full `(MAC, name, role)` triple per unit in
+`firmware/main-unit/kitchen_clock/config/sensors.py`. Reboot the Pi
+once; both sensors come up live and the clock UI shows both at the
+assigned labels — no pairing or bonding step (ADR 0012).
