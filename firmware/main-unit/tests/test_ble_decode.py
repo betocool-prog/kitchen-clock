@@ -3,7 +3,7 @@ import asyncio
 import struct
 import time
 import unittest
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from kitchen_clock.ble.bleak_client import (
     decode_temperature,
@@ -17,11 +17,6 @@ from kitchen_clock.ble.bleak_client import (
     CHAR_HUM_UUID,
     SVC_KCLOCK_UUID,
     CHAR_BATTMV_UUID,
-)
-from kitchen_clock.runner import (
-    safe_read,
-    read_all_sensors,
-    BLEClientCache,
 )
 from kitchen_clock.runner import (
     safe_read,
@@ -604,20 +599,19 @@ class TestRendererDispatch(unittest.TestCase):
 class TestRunnerRenderCache(unittest.TestCase):
     """`BaseRunner` keeps a stable `last_readings` so a single failed
     BLE tick doesn't blank a tile's last live value. Also exercises
-    the BLE watchdog bookkeeping: a sequence of all-failing ticks
-    triggers `maybe_restart_bluetooth` at the threshold.
+    the scanner-mode watchdog bookkeeping: an all-failing tick with
+    a stale hub arms the (rate-limited) scanner restart.
     """
 
     class _NullRunner:
         from kitchen_clock.runner import BaseRunner as _Base
 
         def __init__(self, sensors):
-            self.sensors = list(sensors)
-            self.period_s = 0.1
-            self.last_readings = [None] * len(sensors)
-            self.current_readings = [None] * len(sensors)
-            self._ble_tick_counter = 0
-            self._no_live_ticks = 0
+            from kitchen_clock.runner import BaseRunner
+            BaseRunner.__init__(
+                self, make_client=lambda s: None,
+                sensors=sensors, period_s=0.1,
+            )
 
         # Reuse BaseRunner._tick, but stub the renderer so the
         # test doesn't import pygame or open /dev/fb0.
@@ -729,42 +723,44 @@ class TestRunnerRenderCache(unittest.TestCase):
         )
 
 
+class _FakeHub:
+    """Hub stand-in for runner-integration tests: restart is an
+    AsyncMock and staleness is a settable number."""
+
+    def __init__(self, stale_s=0.0):
+        from unittest.mock import AsyncMock
+        self.restart = AsyncMock()
+        self._stale = stale_s
+        self.legacy_reports = 0
+
+    def min_stale_seconds(self):
+        return self._stale
+
+
 class TestRunnerWatchdog(unittest.TestCase):
-    """`BaseRunner` triggers the BLE watchdog after
-    `FAIL_TICK_THRESHOLD` consecutive ticks where no fresh live
-    reading landed. We mock the watchdog itself so a unit-test
-    run doesn't spawn a dbus subprocess.
+    """`BaseRunner` arms the scanner-restart watchdog when a tick
+    produces no usable data AND the hub reports transport-level
+    staleness. Recovery runs as a background task and is
+    rate-limited by the ScanWatchdog cooldown.
     """
 
-    def _NullRunner(self, sensors):
+    def _make_runner(self, sensors, hub):
         from kitchen_clock.runner import BaseRunner
-        from kitchen_clock.ble.bleak_client import SensorReading
-
-        outer = self
 
         class _Run(BaseRunner):
             async def _tick(self):
                 return await BaseRunner._tick(self)
+
             def _draw(self):
                 pass
 
         r = _Run(
-            make_client=lambda s: _StubClient_with_self(s, self),
+            make_client=lambda s: _StubClient([]) if False else None,
             sensors=sensors, period_s=0.0,
         )
-        r.queue = lambda: outer.queue
+        r.ble_hub = hub
+        # Route cache clients through the outer queue pattern.
         return r
-
-    def setUp(self):
-        self.queue = []
-        # Patch the watchdog module function the runner imports.
-        # The runner imports `maybe_reset_ble_locks` and the
-        # threshold constant from `kitchen_clock.ble.watchdog`.
-        self.patcher = patch("kitchen_clock.runner.maybe_reset_ble_locks")
-        self.mock_watch = self.patcher.start()
-
-    def tearDown(self):
-        self.patcher.stop()
 
     def _reading(self, location, source, T=None, H=None, B=None,
                 T_err=None, H_err=None, B_err=None):
@@ -792,125 +788,77 @@ class TestRunnerWatchdog(unittest.TestCase):
             r.raw_batt = struct.pack("<H", int(B))
         return r
 
-    def test_no_live_ticks_counter_accumulates(self):
+    def test_stale_hub_triggers_one_restart_then_cooldown(self):
+        from kitchen_clock.ble.watchdog import STALE_THRESHOLD_S
         sensors = [("11", "k-x", "outdoor")]
-        runner = self._NullRunner(sensors)
-        fail = [self._reading("outdoor", "connect-fail:ConnectionError")]
+        hub = _FakeHub(stale_s=STALE_THRESHOLD_S + 1.0)
+        runner = self._make_runner(sensors, hub)
+        fail = [self._reading("outdoor", "no-report")]
         runner.cache = BLEClientCache(lambda s: _StubClient(fail))
-        for _ in range(3):
-            asyncio.run(runner._tick())
-        self.assertEqual(runner._no_live_ticks, 3)
-        self.assertEqual(self.mock_watch.call_count, 0,
-            "below threshold no watchdog")
 
-    def test_watchdog_resets_cached_client_backoffs(self):
-        """After the watchdog fires, every cached ble client must
-        have its `_fail_count`, `_next_attempt_at` and cached
-        `_client` cleared — the runner calls
-        `cache.reset_backoffs()` in that path.  We check that
-        the call fans out across all cached clients and that
-        post-reset the next read goes live at once.
-        """
-        import time as _t
+        async def scenario():
+            # Two failing ticks while the hub is fully stale; the
+            # background recovery task needs a live loop to run in.
+            await runner._tick()
+            await runner._tick()
+            # Let the spawned recovery task complete.
+            await asyncio.sleep(0)
+
+        asyncio.run(scenario())
+        # First tick armed + ran the restart; the second tick was
+        # inside the cooldown → exactly one restart.
+        hub.restart.assert_awaited_once()
+
+    def test_fresh_hub_data_does_not_arm_watchdog(self):
         sensors = [("11", "k-x", "outdoor")]
-        runner = self._NullRunner(sensors)
-        # Build a cache with two real RealBleakClient entries and
-        # plant a worst-case cooldown on each.
-        from kitchen_clock.ble.bleak_client import RealBleakClient
-
-        clients = [
-            RealBleakClient(("11", "k-x", "outdoor")),
-            RealBleakClient(("12", "k-y", "indoor")),
-        ]
-        runner.cache._cache = {
-            sensors[0]: clients[0],
-            ("12", "k-y", "indoor"): clients[1],
-        }
-        # Plant dangerous state.
-        now = _t.monotonic()
-        for c in clients:
-            c._fail_count = 6
-            c._next_attempt_at = now + 600.0
-            c._client = object()
-
-        # Simulate the runner's post-watchdog housekeeping:
-        # testing the cache method directly is enough because the
-        # runner just forwards to it.
-        runner.cache.reset_backoffs()
-
-        for c in clients:
-            self.assertEqual(c._fail_count, 0)
-            self.assertEqual(c._next_attempt_at, 0.0)
-            self.assertIsNone(c._client)
-
-    def test_reset_backoffs_only_calls_attr_getable_clients(self):
-        """Slots in the cache may belong to a `MockBleakClient`
-        (from `make_client(mode="mock")`) which doesn't expose
-        `reset_backoff`. The walker should tolerate that — we
-        don't want to crash the runner when somebody passes a
-        custom client impl.
-        """
-        sensors = [("11", "k-x", "outdoor")]
-        runner = self._NullRunner(sensors)
-        class _OtherClient:
-            def __init__(self):
-                self.sensor = sensors[0]
-            async def read(self):
-                from kitchen_clock.ble.bleak_client import SensorReading
-                return SensorReading(mac="11", name="k-x",
-                                     location="outdoor", source="mock")
-
-        other = _OtherClient()
-        runner.cache._cache = {sensors[0]: other}
-        # Just calling reset_backoffs without errors is the contract.
-        runner.cache.reset_backoffs()
-
-    def test_threshold_invokes_watchdog(self):
-        from kitchen_clock.ble.watchdog import FAIL_TICK_THRESHOLD
-        sensors = [("11", "k-x", "outdoor")]
-        runner = self._NullRunner(sensors)
-        fail = [self._reading("outdoor", "connect-fail:ConnectionError")]
+        hub = _FakeHub(stale_s=1.0)
+        runner = self._make_runner(sensors, hub)
+        fail = [self._reading("outdoor", "no-report")]
         runner.cache = BLEClientCache(lambda s: _StubClient(fail))
-        for _ in range(FAIL_TICK_THRESHOLD):
-            asyncio.run(runner._tick())
-        # One invocation right at the threshold crossing.
-        self.assertEqual(self.mock_watch.call_count, 1)
-        self.assertEqual(runner._no_live_ticks, FAIL_TICK_THRESHOLD)
 
-    def test_threshold_invokes_each_tick_above(self):
-        from kitchen_clock.ble.watchdog import FAIL_TICK_THRESHOLD
+        async def scenario():
+            await runner._tick()
+            await asyncio.sleep(0)
+
+        asyncio.run(scenario())
+        hub.restart.assert_not_awaited()
+
+    def test_live_data_does_not_arm_watchdog_even_if_stale(self):
+        from kitchen_clock.ble.watchdog import STALE_THRESHOLD_S
         sensors = [("11", "k-x", "outdoor")]
-        runner = self._NullRunner(sensors)
-        fail = [self._reading("outdoor", "connect-fail:ConnectionError")]
-        runner.cache = BLEClientCache(lambda s: _StubClient(fail))
-        for _ in range(FAIL_TICK_THRESHOLD + 2):
-            asyncio.run(runner._tick())
-        # The watchdog fires every tick at or above the threshold
-        # so a sustained outage keeps the python alarm pumping
-        # rather than latching once.
-        self.assertEqual(
-            self.mock_watch.call_count, 3,
-            "3 calls at tick counts 5/6/7 (i.e. threshold + 2 extras)",
+        hub = _FakeHub(stale_s=STALE_THRESHOLD_S + 1.0)
+        runner = self._make_runner(sensors, hub)
+        live = [self._reading("outdoor", "live", T=21.0, H=50.0)]
+        runner.cache = BLEClientCache(lambda s: _StubClient(live))
+
+        async def scenario():
+            await runner._tick()
+            await asyncio.sleep(0)
+
+        asyncio.run(scenario())
+        hub.restart.assert_not_awaited()
+
+    def test_recover_failure_is_survived(self):
+        """A hub restart that raises must not take the tick loop
+        down; the watchdog swallows it (logged) and the cooldown
+        spacing prevents a restart storm."""
+        from kitchen_clock.ble.watchdog import STALE_THRESHOLD_S
+        sensors = [("11", "k-x", "outdoor")]
+        hub = _FakeHub(stale_s=STALE_THRESHOLD_S + 1.0)
+        hub.restart = AsyncMock(
+            side_effect=RuntimeError("No buffer space available"),
         )
+        runner = self._make_runner(sensors, hub)
+        fail = [self._reading("outdoor", "no-report")]
+        runner.cache = BLEClientCache(lambda s: _StubClient(fail))
 
-    def test_live_tick_resets_counter(self):
-        from kitchen_clock.ble.watchdog import FAIL_TICK_THRESHOLD
-        sensors = [("11", "k-x", "outdoor")]
-        runner = self._NullRunner(sensors)
-        # run 2 failed ticks first
-        fail_readings = [self._reading("outdoor", "connect-fail:ConnectionError")] * 2
-        runner.cache = BLEClientCache(lambda s: _StubClient(fail_readings))
-        for _ in range(2):
-            asyncio.run(runner._tick())
-        old_calls = self.mock_watch.call_count
-        # A live tick resets the counter and panel rendering captures
-        # the live value.
-        live = self._reading("outdoor", "live", T=21.0, H=50.0)
-        runner.cache = BLEClientCache(lambda s: _StubClient([live]))
-        asyncio.run(runner._tick())
-        self.assertEqual(runner._no_live_ticks, 0)
-        self.assertEqual(self.mock_watch.call_count, old_calls,
-            "live tick did not invoke watchdog beyond what failed ticks already did")
+        async def scenario():
+            await runner._tick()
+            await asyncio.sleep(0)
+
+        # No raise escapes the tick.
+        asyncio.run(scenario())
+        hub.restart.assert_awaited_once()
 
 
 class _StubClient_with_self:
@@ -946,28 +894,24 @@ class _StubClient:
 
 
 class TestRunnerPartialPromotion(unittest.TestCase):
-    """Partial live readings must not overwrite `last_readings`.
+    """Partial live readings promote per field (ADR 0012).
 
-    With the v7 windowed BLE firmware the central can connect
-    inter-window — ble_noise gives the central a 5-second window
-    during which the peripheral might still be in the middle of
-    its own measurement and the GATT chars aren't populated yet.
-    We treat that as a "partial live" tick and surface it in the
-    journal state line, but the *render cache* continues to carry
-    the last fully-good reading, so the panel doesn't flash a
-    half-set.
+    A report that carries a fresh temperature but no humidity or
+    battery value refreshes only the temperature slot; the other
+    slots keep the previous good values. The journal state still
+    surfaces the raw per-tick attempt so the user can see what
+    came through.
     """
 
     class _NullRunner:
         from kitchen_clock.runner import BaseRunner as _Base
 
         def __init__(self, sensors):
-            self.sensors = list(sensors)
-            self.period_s = 0.1
-            self.last_readings = [None] * len(sensors)
-            self.current_readings = [None] * len(sensors)
-            self._ble_tick_counter = 0
-            self._no_live_ticks = 0
+            from kitchen_clock.runner import BaseRunner
+            BaseRunner.__init__(
+                self, make_client=lambda s: None,
+                sensors=sensors, period_s=0.1,
+            )
 
         async def _tick(self):
             from kitchen_clock.runner import BaseRunner
@@ -996,7 +940,7 @@ class TestRunnerPartialPromotion(unittest.TestCase):
             r.raw_batt = struct.pack("<H", int(B))
         return r
 
-    def test_partial_live_does_not_overwrite_last_good(self):
+    def test_partial_live_promotes_valid_fields_keeps_failed(self):
         sensors = [("11", "k1", "outdoor")]
         runner = self._NullRunner(sensors)
 
@@ -1016,12 +960,13 @@ class TestRunnerPartialPromotion(unittest.TestCase):
         runner.cache = BLEClientCache(lambda s: _StubClient([partial]))
         asyncio.run(runner._tick())
 
-        # Render cache is unchanged.
-        self.assertEqual(runner.last_readings[0].temp_c, 21.5)
+        # The valid field is promoted; failed fields keep the
+        # previous good values.
+        self.assertEqual(runner.last_readings[0].temp_c, 22.5)
         self.assertEqual(runner.last_readings[0].hum_percent, 40.0)
         self.assertEqual(runner.last_readings[0].batt_raw, 3500)
 
-        # But the journal state is the partial one — user can see it.
+        # And the journal state still reflects the raw attempt.
         self.assertEqual(runner.current_readings[0].temp_c, 22.5)
         self.assertIsNone(runner.current_readings[0].hum_percent)
         self.assertIsNone(runner.current_readings[0].batt_raw)

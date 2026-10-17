@@ -1,101 +1,83 @@
-"""In-service BLE watchdog.
+"""In-service BLE watchdog — scanner transport (ADR 0012).
 
-When every tile on the panel fails for `FAIL_TICK_THRESHOLD`
-consecutive ticks, the runner arms a recovery cycle. This file
-holds the actual recovery routine.
+When *no* registered sensor has reported for `STALE_THRESHOLD_S`,
+the scanner (or bluetoothd) is suspect and the runner restarts
+discovery — rate-limited to one attempt per `RECOVERY_COOLDOWN_S`,
+and always as a background asyncio task so the render loop never
+blocks on D-Bus.
 
-Why a scan off/on cycle, not a system-level restart:
+Why a scanner restart, not the old `bluetoothctl` cycling:
 
-  - Running as `betocool` inside `kitchen-clock.service`, we
-    *cannot* `systemctl restart bluetooth.service` — polkit only
-    authorises the active session's admin user, and `[Service]
-    User=betocool` doesn't carry the magic. The earlier
-    `dbus-send RestartUnit(bluetooth.service)` call returned with
-    a MethodReturn but the service did not actually restart; the
-    journal showed continued `connect-fail: ConnectionError`
-    even after the watchdog fired.
-  - `bluetoothctl scan off; scan on` is a session-DBus call against
-    `org.bluez.Adapter1`. The session DBus ACL permits any user
-    with a graphical session bus to flip the discovery filter.
-    The HCI controller is reset by `StopDiscovery -> StartDiscovery`
-    and any "still-connected" cached entry on the BlueZ adapter
-    state is dropped on the next inquiry.
-  - This is the exact pattern you ran by hand whenever the lockout
-    re-asserted itself. Automating it inside the runner eliminates
-    the catch-and-restart loop the user has been doing all week.
+  - The 2026-10-17 incident: the connect/poll model wedged D-Bus so
+    thoroughly that `bluetoothctl` calls *crashed* (libdbus
+    assertion) and even `org.freedesktop.DBus.ListNames` returned
+    ENOBUFS. The then-watchdog kept spawning `bluetoothctl` every
+    tick for an hour and left discovery permanently on, feeding the
+    flood. Rate-limiting and staying inside bleak's own
+    scanner-start path (same process, same D-Bus connection) avoids
+    both failure modes.
+  - `ScannerHub.restart()` is `stop()` + `start()` on *our* scanner
+    with *our* UUID filter — it can never leave unfiltered
+    discovery running the way `bluetoothctl scan on` did.
 
-Side note: the runner also calls `cache.reset_backoffs()` on the
-same tick so the next attempt goes live at once instead of
-honouring the exponential-backoff counter we accumulated during
-the outage.
+If D-Bus is dead the restart raises; that is logged and retried
+after the cooldown. A hard-wedged daemon needs the reboot only the
+operator can perform — the journal lines make that state explicit
+("restart failed" repeating with cooldown spacing).
 """
 from __future__ import annotations
 
 import logging
-import subprocess
 import time
 
-# How many consecutive ticks with zero live tiles before we
-# trigger the watchdog. Tuned empirically: with `--period 0.25`
-# the runner does 4 ticks/s, so 5 ticks is ~1.25 s of total
-# staleness before we attempt a reset. Lower would false-positive
-# during the perennial BLE re-advert cycle of peripheral firmware.
-FAIL_TICK_THRESHOLD = 5
+# How long without any sensor report before the scanner is restarted.
+# The firmware samples every 15 s and advertises continuously, so
+# 90 s means ~6 missed sample rounds — clearly transport trouble,
+# not a single lost packet.
+STALE_THRESHOLD_S = 90.0
 
-# Time to leave the discovery-filter off before re-arming; lets the
-# HCI controller process the StopDiscovery confirm and drop any
-# "stale Connected" cached entry on the BlueZ adapter state.
-SCAN_OFF_SETTLE_S = 0.5
-
-# Hard timeout per `bluetoothctl` subprocess run. `bluetoothctl`
-# occasionally takes a few seconds to talk to the session DBus
-# daemon; we don't want the runner to spin forever on that call.
-BLUETOOTHCTL_TIMEOUT_S = 5.0
+# Minimum spacing between restart attempts. Keeps a dead D-Bus from
+# turning the watchdog into a restart storm (the 2026-10-17 failure
+# mode of the old tick-count watchdog).
+RECOVERY_COOLDOWN_S = 120.0
 
 
-def maybe_reset_ble_locks(consecutive_fail_ticks: int) -> bool:
-    """Toggle BlueZ scanning to break the stale-Connected lockout.
+class ScanWatchdog:
+    """Rate-limited staleness watchdog for the scanner transport."""
 
-    Returns True once the recovery cycle has been attempted. The
-    runner resets the cached ble client's backoffs so the very
-    next `_tick()` reads on a fresh HCI state.
-    """
-    if consecutive_fail_ticks < FAIL_TICK_THRESHOLD:
-        return False
+    def __init__(self,
+                 stale_threshold_s: float = STALE_THRESHOLD_S,
+                 cooldown_s: float = RECOVERY_COOLDOWN_S):
+        self._stale_threshold = stale_threshold_s
+        self._cooldown = cooldown_s
+        self._last_recovery = float("-inf")
 
-    logging.warning(
-        "BLE watchdog: %d consecutive failed ticks → "
-        "bluetoothctl scan off/on cycle",
-        consecutive_fail_ticks,
-    )
+    def should_fire(self, stale_s: float) -> bool:
+        """True when a restart is due. Consumes the cooldown slot."""
+        if stale_s < self._stale_threshold:
+            return False
+        now = time.monotonic()
+        if now - self._last_recovery < self._cooldown:
+            return False
+        self._last_recovery = now
+        return True
 
-    # Try the off/on pair; be tolerant of either failing — we
-    # can still have a single-sided reset with the same effect.
-    _bluetoothctl_scan_off()
-    time.sleep(SCAN_OFF_SETTLE_S)
-    _bluetoothctl_scan_on()
-    return True
+    async def recover(self, hub) -> bool:
+        """Restart the hub's scanner. Never raises.
 
-
-def _bluetoothctl_scan_off() -> None:
-    try:
-        subprocess.run(
-            ["bluetoothctl", "scan", "off"],
-            check=False,
-            capture_output=True,
-            timeout=BLUETOOTHCTL_TIMEOUT_S,
+        Returns True when the restart succeeded, False when it
+        failed (logged); the next attempt waits out the cooldown.
+        """
+        logging.warning(
+            "BLE watchdog: no sensor reports for %.0f s "
+            "→ restarting scanner", hub.min_stale_seconds(),
         )
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        logging.warning("BLE watchdog: bluetoothctl scan off failed: %s", exc)
-
-
-def _bluetoothctl_scan_on() -> None:
-    try:
-        subprocess.run(
-            ["bluetoothctl", "scan", "on"],
-            check=False,
-            capture_output=True,
-            timeout=BLUETOOTHCTL_TIMEOUT_S,
-        )
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        logging.warning("BLE watchdog: bluetoothctl scan on failed: %s", exc)
+        try:
+            await hub.restart()
+            return True
+        except Exception as exc:  # noqa: BLE001 — watchdog must not raise
+            logging.warning(
+                "BLE watchdog: scanner restart failed: %s: %s",
+                type(exc).__name__, exc,
+            )
+            return False

@@ -265,6 +265,9 @@ class FbdevRunner(BaseRunner):
         # the timing trace we need for first-tick diagnostics.
         print("[FbdevRunner] run() entered", file=sys.stderr, flush=True)
         try:
+            # Scanner transport (ADR 0012): discovery runs beside the
+            # render loop; a failed start is journalled, not fatal.
+            await self._start_ble()
             tick_n = 0
             while True:
                 t_loops = _monotonic()

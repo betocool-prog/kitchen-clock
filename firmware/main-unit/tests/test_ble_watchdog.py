@@ -1,133 +1,89 @@
-"""Tests for the in-service BLE watchdog.
+"""Tests for the scanner-transport watchdog (ADR 0012).
 
-We mock `subprocess.run` (and `time.sleep` to keep tests fast)
-so we don't actually call out to bluetoothctl during a unit
-test. The runner is responsible for invoking
-`maybe_reset_ble_locks` with a count; we test the threshold
-boundary and the shape of the command lines that would go to
-bluetoothctl on the Pi.
+The watchdog is a rate-limited `ScannerHub.restart()` driver: it
+must fire only past `STALE_THRESHOLD_S`, at most once per
+`RECOVERY_COOLDOWN_S`, never raise on a failed restart, and never
+touch subprocesses (the old bluetoothctl cycling fed the
+2026-10-17 D-Bus wedge).
 """
+import asyncio
+import time
 import unittest
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock
 
 from kitchen_clock.ble.watchdog import (
-    FAIL_TICK_THRESHOLD,
-    SCAN_OFF_SETTLE_S,
-    maybe_reset_ble_locks,
+    RECOVERY_COOLDOWN_S,
+    STALE_THRESHOLD_S,
+    ScanWatchdog,
 )
 
 
-class TestThreshold(unittest.TestCase):
-    """Below threshold → no shell-out. At/above → one shell-out."""
+class FakeHub:
+    """Minimal hub stand-in: restart() is an AsyncMock."""
 
-    def test_below_threshold_is_idempotent(self):
-        for n in range(0, FAIL_TICK_THRESHOLD):
-            with patch(
-                "kitchen_clock.ble.watchdog.subprocess.run",
-            ) as mock_run, patch(
-                "kitchen_clock.ble.watchdog.time.sleep",
-            ):
-                self.assertFalse(maybe_reset_ble_locks(n))
-                mock_run.assert_not_called()
-
-    def test_at_threshold_invokes_reset(self):
-        with patch(
-            "kitchen_clock.ble.watchdog.subprocess.run",
-        ) as mock_run, patch(
-            "kitchen_clock.ble.watchdog.time.sleep",
-        ):
-            self.assertTrue(
-                maybe_reset_ble_locks(FAIL_TICK_THRESHOLD),
-            )
-            # off + on
-            self.assertEqual(mock_run.call_count, 2)
-
-    def test_well_above_threshold_still_invokes(self):
-        with patch(
-            "kitchen_clock.ble.watchdog.subprocess.run",
-        ) as mock_run, patch(
-            "kitchen_clock.ble.watchdog.time.sleep",
-        ):
-            self.assertTrue(
-                maybe_reset_ble_locks(FAIL_TICK_THRESHOLD + 50),
-            )
-            self.assertEqual(mock_run.call_count, 2)
+    def __init__(self, restart_exc=None):
+        self.restart = AsyncMock(side_effect=restart_exc)
+        self.min_stale_seconds = lambda: STALE_THRESHOLD_S
 
 
-class TestBluetoothctlCommandLine(unittest.TestCase):
-    """Argument shape that would actually run on the Pi."""
+class TestShouldFire(unittest.TestCase):
+    def test_below_threshold_never_fires(self):
+        wd = ScanWatchdog()
+        for _ in range(10):
+            self.assertFalse(wd.should_fire(STALE_THRESHOLD_S - 0.1))
 
-    def test_off_then_on(self):
-        with patch(
-            "kitchen_clock.ble.watchdog.subprocess.run",
-            return_value=MagicMock(returncode=0),
-        ) as mock_run, patch(
-            "kitchen_clock.ble.watchdog.time.sleep",
-        ):
-            maybe_reset_ble_locks(FAIL_TICK_THRESHOLD)
-            args = mock_run.call_args_list
-            self.assertEqual(args[0][0][0], ["bluetoothctl", "scan", "off"])
-            self.assertEqual(args[1][0][0], ["bluetoothctl", "scan", "on"])
+    def test_at_threshold_fires_once_then_cooldown(self):
+        wd = ScanWatchdog()
+        self.assertTrue(wd.should_fire(STALE_THRESHOLD_S))
+        # Immediately after: suppressed by the cooldown.
+        self.assertFalse(wd.should_fire(STALE_THRESHOLD_S * 10))
 
-    def test_settle_sleep_between_off_and_on(self):
-        with patch(
-            "kitchen_clock.ble.watchdog.subprocess.run",
-        ) as mock_run, patch(
-            "kitchen_clock.ble.watchdog.time.sleep",
-        ) as mock_sleep:
-            self.assertTrue(
-                maybe_reset_ble_locks(FAIL_TICK_THRESHOLD),
-            )
-            # The runner does ONE sleep between off and on.
-            self.assertEqual(mock_sleep.call_count, 1)
-            self.assertAlmostEqual(
-                mock_sleep.call_args.args[0], SCAN_OFF_SETTLE_S,
-                places=6,
-            )
+    def test_fires_again_after_cooldown_elapses(self):
+        wd = ScanWatchdog()
+        self.assertTrue(wd.should_fire(STALE_THRESHOLD_S))
+        # Simulate the cooldown having elapsed.
+        wd._last_recovery = time.monotonic() - RECOVERY_COOLDOWN_S - 1
+        self.assertTrue(wd.should_fire(STALE_THRESHOLD_S))
 
-    def test_settle_constant_is_a_finite_number(self):
-        # If we accidentally set SCAN_OFF_SETTLE_S to a runaway
-        # value the system would still self-heal but slowly.
-        # Pin a sane upper bound.
-        self.assertLessEqual(SCAN_OFF_SETTLE_S, 2.5)
+    def test_threshold_edge_is_inclusive(self):
+        wd = ScanWatchdog()
+        self.assertTrue(wd.should_fire(STALE_THRESHOLD_S + 0.001))
 
 
-class TestResilience(unittest.TestCase):
-    """The runner must not crash if bluetoothctl is missing or
-    hangs. The watchdog function swallows the relevant errors and
-    still returns True so caching resets can fire.
-    """
+class TestRecover(unittest.TestCase):
+    def test_restart_called_once_and_returns_true(self):
+        wd = ScanWatchdog()
+        hub = FakeHub()
+        self.assertTrue(asyncio.run(wd.recover(hub)))
+        hub.restart.assert_awaited_once_with()
 
-    def test_missing_bluetoothctl_does_not_raise(self):
-        with patch(
-            "kitchen_clock.ble.watchdog.subprocess.run",
-            side_effect=FileNotFoundError("bluetoothctl"),
-        ), patch(
-            "kitchen_clock.ble.watchdog.time.sleep",
-        ):
-            # Should still return True (attempted) and not raise.
-            self.assertTrue(
-                maybe_reset_ble_locks(FAIL_TICK_THRESHOLD),
-            )
+    def test_restart_failure_does_not_raise(self):
+        wd = ScanWatchdog()
+        hub = FakeHub(
+            restart_exc=RuntimeError("No buffer space available"),
+        )
+        self.assertFalse(asyncio.run(wd.recover(hub)))
 
-    def test_bluetoothctl_timeout_does_not_raise(self):
-        import subprocess as _sub
-        with patch(
-            "kitchen_clock.ble.watchdog.subprocess.run",
-            side_effect=_sub.TimeoutExpired(cmd=["bluetoothctl"], timeout=5),
-        ), patch(
-            "kitchen_clock.ble.watchdog.time.sleep",
-        ):
-            self.assertTrue(
-                maybe_reset_ble_locks(FAIL_TICK_THRESHOLD),
-            )
+    def test_recover_consumes_no_extra_cooldown(self):
+        # recover() itself must not bump _last_recovery — only
+        # should_fire() grants cooldown slots.
+        wd = ScanWatchdog()
+        before = wd._last_recovery
+        asyncio.run(wd.recover(FakeHub()))
+        self.assertEqual(wd._last_recovery, before)
 
 
-class TestThresholdDefault(unittest.TestCase):
-    """Pin the threshold default so a regression here is loud."""
+class TestConstants(unittest.TestCase):
+    """Pin the tuning so a regression here is loud."""
 
-    def test_threshold_is_five(self):
-        self.assertEqual(FAIL_TICK_THRESHOLD, 5)
+    def test_threshold_at_least_a_few_sample_rounds(self):
+        # Firmware samples every 15 s; the threshold must tolerate
+        # several missed rounds without flapping.
+        self.assertGreaterEqual(STALE_THRESHOLD_S, 45.0)
+
+    def test_cooldown_longer_than_threshold(self):
+        # A restart storm is the failure mode this guards against.
+        self.assertGreaterEqual(RECOVERY_COOLDOWN_S, 60.0)
 
 
 if __name__ == "__main__":

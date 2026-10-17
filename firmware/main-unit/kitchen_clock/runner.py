@@ -1,30 +1,36 @@
-"""Renderer-loop helpers shared by PygameRunner and LvglRunner.
-
-The two backends differ only on the `_draw()` side; the
-"gather → draw → sleep → repeat" loop is identical, as is the
-per-sensor exception fence.
+"""Renderer-loop helpers shared by PygameRunner and FbdevRunner.
 
 Path A (ADR 0011): this file is shared across host (PyGame) and
 Pi runtime (FbdevRunner). It deliberately imports nothing from
 pygame so it stays importable from either side without side-effects.
 
-`BaseRunner` also carries an in-service BLE watchdog: when the
-runner has gone `FAIL_TICK_THRESHOLD` consecutive ticks with
-zero live tiles, it cycles BlueZ scanning via
-`bluetoothctl scan off; scan on`. This catches the
-"stale `Connected: yes` lockout" symptom we saw on the bench
-without requiring the user to `sudo systemctl restart
-bluetooth.service` by hand.
+Transport (ADR 0012): in live mode the runner carries a
+`ble_hub` (ScannerHub) — a filtered passive scanner that never
+opens a GATT connection. `_tick()` therefore never touches the
+radio: it drains the hub's cached reports, merges them into the
+render cache, and draws. Scanner start/restart run as their own
+awaitables (never blocking the render loop), and the watchdog
+(`ble/watchdog.py`) restarts the scanner — rate-limited — when no
+registered sensor has reported for `STALE_THRESHOLD_S`.
+
+Render-cache semantics (the panel never blanks on BLE trouble):
+
+  `current_readings` — what the transport surfaced this tick
+    (fresh, `stale:Ns`, `no-report`, ...). Journal/diag only.
+
+  `last_readings` — last-known-good per tile, merged *per field*:
+    a report that carries a fresh temperature but no battery
+    value updates only the temperature slot; the other slots keep
+    their previous good values. A tile that has never seen data
+    stays `None` and renders as `n/a`.
 """
+
 import asyncio
 import time as _time
-from typing import Callable, List, Tuple
+from typing import Callable, List, Optional, Tuple
 
 from .ble.bleak_client import SensorReading
-from .ble.watchdog import (
-    FAIL_TICK_THRESHOLD,
-    maybe_reset_ble_locks,
-)
+from .ble.watchdog import ScanWatchdog
 
 SensorTuple = Tuple[str, str, str]
 
@@ -33,19 +39,57 @@ def _is_complete(reading) -> bool:
     """True when every GATT char read came back and the connection
     itself was established.
 
-    Module-level so `_NullRunner` test containers can resolve it
-    through `runner._is_complete` without inheriting the full
-    `BaseRunner` machinery. Equivalently: SensorReading with
-    `source in ("live", "mock")` and no error string on any of
-    the three slots — the error strings are set by `_safe_read`
-    when a per-char read timed out or otherwise failed, so an
-    empty string here means the read succeeded.
+    Kept for callers/tests that want the strict definition; the
+    render cache no longer requires it — `merge_reading` promotes
+    whichever fields are valid so a partial report still refreshes
+    the fields it carries.
     """
     return (
         reading.source in ("live", "mock")
         and not reading.temp_error
         and not reading.hum_error
         and not reading.batt_error
+    )
+
+
+def _any_field_ok(reading) -> bool:
+    """True when the reading carries at least one usable field."""
+    if reading.source not in ("live", "mock"):
+        return False
+    return not (reading.temp_error and reading.hum_error
+                and reading.batt_error)
+
+
+def merge_reading(old: Optional[SensorReading],
+                  new: SensorReading) -> SensorReading:
+    """Per-field promotion: valid fields from `new`, the rest from `old`.
+
+    A field is "valid" when its per-characteristic read succeeded
+    (`*_error` empty and raw bytes present). Failed or missing
+    fields inherit the previous good value so one flaky
+    characteristic (e.g. the battery ADC sentinel) cannot freeze an
+    otherwise-fresh tile.
+    """
+
+    def pick(new_raw, new_err, old_raw):
+        if new_err or not new_raw:
+            return old_raw, ""
+        return new_raw, ""
+
+    if old is None:
+        raw_t, e_t = new.raw_temp, ""
+        raw_h, e_h = new.raw_hum, ""
+        raw_b, e_b = new.raw_batt, ""
+    else:
+        raw_t, e_t = pick(new.raw_temp, new.temp_error, old.raw_temp)
+        raw_h, e_h = pick(new.raw_hum, new.hum_error, old.raw_hum)
+        raw_b, e_b = pick(new.raw_batt, new.batt_error, old.raw_batt)
+
+    return SensorReading(
+        mac=new.mac, name=new.name, location=new.location,
+        raw_temp=raw_t, raw_hum=raw_h, raw_batt=raw_b,
+        temp_error=e_t, hum_error=e_h, batt_error=e_b,
+        source=new.source,
     )
 
 
@@ -72,21 +116,22 @@ async def read_all_sensors(
     sensors: List[SensorTuple],
     client_factory: Callable[[SensorTuple], object],
 ) -> List[SensorReading]:
-    """Concurrent GATT reads, one per sensor. Preserves input order.
+    """Per-sensor reads, one per sensor, preserving input order.
 
-    Exceptions in any sensor's pipeline are caught per-sensor so a
-    single peripheral going dark does not stall the rest of the
-    dashboard. Output list has length == len(sensors).
+    With the scanner transport this is a pure state drain (no radio
+    work, no concurrency needed). Exceptions in any sensor's
+    pipeline are caught per-sensor so a single peripheral going dark
+    does not stall the rest of the dashboard. Output list has
+    length == len(sensors).
     """
-    clients = [(s, client_factory(s)) for s in sensors]
-    tasks = [safe_read(c) for _, c in clients]
-    return list(await asyncio.gather(*tasks))
+    readings = []
+    for s in sensors:
+        readings.append(await safe_read(client_factory(s)))
+    return readings
 
 
 class BLEClientCache:
-    """Memoize BLE clients per sensor tuple so we don't churn GATT
-    connections every tick.
-    """
+    """Memoize BLE clients per sensor tuple."""
 
     def __init__(self, factory: Callable[[SensorTuple], object]):
         self._factory = factory
@@ -100,11 +145,8 @@ class BLEClientCache:
     def reset_backoffs(self) -> None:
         """Force-clear cached clients' connection-failure state.
 
-        Used right after a `bluetooth.service` restart from the
-        BLE watchdog thread: each cached client still holds
-        `_fail_count > 0` and `_next_attempt_at` in the future
-        otherwise, so even with the daemon-state machinery fresh,
-        our pessimistic cooldown would still keep us out.
+        Retained for the legacy GATT client (`RealBleakClient`);
+        the scanner transport has no connection state to clear.
         """
         for client in self._cache.values():
             reset = getattr(client, "reset_backoff", None)
@@ -119,27 +161,27 @@ class BaseRunner:
     """Common "gather → draw → sleep → repeat" loop.
 
     Concrete subclasses implement:
-      - `run()`     (event-loop glue: pygame event pump, lvgl tick, etc.)
+      - `run()`     (event-loop glue: pygame event pump, fbdev blit)
       - `_draw()`   (surface rendering)
 
     Both subclasses share:
-      - per-tick concurrent GATT reads via `read_all_sensors`
-      - per-sensor exception fence via `safe_read`
+      - per-tick transport drain via `read_all_sensors`
+      - per-field render-cache promotion via `merge_reading`
       - BLE-client caching via `BLEClientCache`
-      - BLE watchdog: monitor consecutive-fail count, restart
-        `bluetooth.service` via DBus if it crosses the threshold.
+      - scanner-mode watchdog: when *no* registered sensor has
+        reported for `STALE_THRESHOLD_S`, restart the hub's
+        scanner — at most once per `RECOVERY_COOLDOWN_S`, as a
+        background task so the render loop never blocks.
 
-    There's a deliberate split between two reading lists:
-
-      `current_readings` — what BLE just returned this tick.
-        Reflects the *attempt*, good or bad. Used by the per-tick
-        journal state line + BLE diag line.
-
-      `last_readings` — last-known-good (source='live' or 'mock')
-        per tile. Used by `_draw()` so a failing peripheral doesn't
-        blank the tile's last successful T/H/B. A tile that has
-        never succeeded stays `None` and renders as `n/a`.
+    Set `runner.ble_hub = ScannerHub(...)` before `run()` for the
+    live scanner transport (ADR 0012); without it the runner is in
+    mock/synthetic mode and the watchdog is inert.
     """
+
+    # Journal cadence: per-tick state lines only fire on change or
+    # every HEARTBEAT_TICKS (~60 s at the 0.25 s period) so a healthy
+    # panel no longer writes 3+ lines/s to the journal.
+    HEARTBEAT_TICKS = 240
 
     def __init__(self, *, make_client, sensors, period_s: float = 2.0):
         self.cache = BLEClientCache(make_client)
@@ -147,7 +189,46 @@ class BaseRunner:
         self.period_s = period_s
         self.last_readings: list = [None] * len(self.sensors)
         self.current_readings: list = [None] * len(self.sensors)
-        self._no_live_ticks: int = 0
+        self.ble_hub = None                    # ScannerHub in live mode
+        self._scan_watchdog = ScanWatchdog()
+        self._recovery_in_flight = False
+        self._ble_tick_counter = 0
+        self._last_state_line = ""
+        self._last_diag_sources: dict = {}
+        self._legacy_hint_count = 0
+
+    async def _start_ble(self) -> None:
+        """Start the scanner transport, if attached.
+
+        Never raises: a failed start (e.g. bluetoothd not up yet) is
+        journalled and retried by the watchdog's restart path.
+        """
+        import sys
+        hub = self.ble_hub
+        if hub is None:
+            return
+        try:
+            await hub.start()
+        except Exception as exc:
+            print(
+                f"[BaseRunner] BLE scanner start failed: "
+                f"{type(exc).__name__}: {exc} "
+                f"(watchdog will retry)",
+                file=sys.stderr, flush=True,
+            )
+
+    async def _recover_scanner(self, hub) -> None:
+        """Watchdog recovery body — runs as a background task."""
+        import sys
+        try:
+            ok = await self._scan_watchdog.recover(hub)
+            print(
+                f"[BaseRunner] BLE watchdog: scanner restart "
+                f"{'succeeded' if ok else 'failed — will retry after cooldown'}",
+                file=sys.stderr, flush=True,
+            )
+        finally:
+            self._recovery_in_flight = False
 
     async def _tick(self) -> None:
         import sys
@@ -156,58 +237,38 @@ class BaseRunner:
             self.sensors, self.cache.client_for,
         )
         t1_read = _time.monotonic()
-        # Promote live/mock fresh readings into the render cache;
-        # leave prior live readings in place for failed attempts so
-        # the panel doesn't blank on a single dropped BLE ack.
-        # We additionally restrict promotion to fully-complete
-        # readings: every per-characteristic read must have
-        # succeeded. Partial live readings (some per-char timeout)
-        # are surfaced in the journal state so the user can see
-        # them, but DO NOT replace the cached last good reading.
-        # This is what the user asked for after the
-        # BLE-windowed firmware: don't flash a half-set onto the
-        # panel until a fully-fresh sample has come through.
+
+        # Promote per-field: every valid field refreshes the tile's
+        # cached value; failed fields keep the previous good one.
+        # Partial reports are also surfaced in the journal state so
+        # the user can see them.
         any_complete = False
         for i, r in enumerate(self.current_readings):
             if r is None:
                 continue
-            if r.source in ("live", "mock") and _is_complete(r):
-                self.last_readings[i] = r
-                any_complete = True
-        # Watchdog bookkeeping: count only ticks where *no* tile
-        # produced a fresh LIVE reading. Partial reads (any_complete
-        # is False) reset the counter too — partial data means we
-        # *connected* and we're back in business; only the floor of
-        # zero tiles live counts as a real outage.
-        if any_complete:
-            self._no_live_ticks = 0
-        else:
-            self._no_live_ticks += 1
-        if self._no_live_ticks >= FAIL_TICK_THRESHOLD:
-            try:
-                if maybe_reset_ble_locks(self._no_live_ticks):
-                    # After we've cycled BlueZ scanning, our
-                    # cached ble clients are still pointing at
-                    # d-bus objects the daemon just invalidated,
-                    # plus we're in cooldown. Drop the backoff
-                    # state and the cached `_client` reference so
-                    # the next read() builds a fresh client and
-                    # goes live at once instead of waiting up to
-                    # 60 s.
-                    self.cache.reset_backoffs()
-            except Exception as exc:
-                print(
-                    f"[BaseRunner] watchdog invocation failed: "
-                    f"{type(exc).__name__}: {exc}",
-                    file=sys.stderr, flush=True,
+            if _any_field_ok(r):
+                self.last_readings[i] = merge_reading(
+                    self.last_readings[i], r,
                 )
-        # Compact one-line BLE state summary — gives journalctl a
-        # way to see whether each tile is producing live readings or
-        # sitting on connect-fail / per-character errors. Don't roof
-        # the journal: a tick is ~0.3 s, so 3 lines/s is fine.
+                any_complete = True
+
+        # Scanner-mode watchdog: when *no* sensor reported recently,
+        # restart the scanner — rate-limited, never on the render
+        # loop's own coroutine.
+        hub = self.ble_hub
+        if hub is not None and not any_complete:
+            stale_s = hub.min_stale_seconds()
+            if (self._scan_watchdog.should_fire(stale_s)
+                    and not self._recovery_in_flight):
+                self._recovery_in_flight = True
+                task = asyncio.create_task(self._recover_scanner(hub))
+                task.add_done_callback(lambda _t: None)
+
+        # Compact one-line BLE state summary for the journal — on
+        # change or heartbeat only (see HEARTBEAT_TICKS).
         try:
-            tick_n = getattr(self, "_ble_tick_counter", 0) + 1
-            self._ble_tick_counter = tick_n
+            self._ble_tick_counter += 1
+            tick_n = self._ble_tick_counter
             states = " ".join(
                 f"{r.location}={r.source.split(':', 1)[0]}"
                 f":T={r.temp_c if isinstance(r.temp_c, (int, float)) else '-'}"
@@ -215,30 +276,49 @@ class BaseRunner:
                 f":B={r.batt_raw if isinstance(r.batt_raw, int) else '-'}"
                 for r in self.current_readings if r is not None
             )
-            print(
-                f"[BaseRunner] tick #{tick_n} state: {states}",
-                file=sys.stderr, flush=True,
-            )
+            if states != self._last_state_line or tick_n % self.HEARTBEAT_TICKS == 0:
+                print(
+                    f"[BaseRunner] tick #{tick_n} state: {states}",
+                    file=sys.stderr, flush=True,
+                )
+                self._last_state_line = states
         except Exception:
             pass
-        # Highlight non-live / non-mock states with the raw source
-        # string sojourners can grep for the full exception at the
-        # next layer down (e.g. "ModulationError: ...").
+
+        # Non-live/non-mock sources get a diag line when the source
+        # *changes* (not every tick — a stale sensor would otherwise
+        # spam one line per tick as its age grows).
         for r in self.current_readings:
             if r is None:
                 continue
-            if r.source not in ("live", "mock"):
-                print(
-                    f"[BaseRunner] BLE diag[{r.location}]: "
-                    f"mac={r.mac} source={r.source}",
-                    file=sys.stderr, flush=True,
-                )
+            if r.source in ("live", "mock"):
+                continue
+            last = self._last_diag_sources.get(r.location)
+            if last == r.source:
+                continue
+            self._last_diag_sources[r.location] = r.source
+            print(
+                f"[BaseRunner] BLE diag[{r.location}]: "
+                f"mac={r.mac} source={r.source}",
+                file=sys.stderr, flush=True,
+            )
+
+        # One-time hint when our sensors advertise without service
+        # data — v7-era firmware needs flashing before the scanner
+        # transport can see any values.
+        if hub is not None and hub.legacy_reports > self._legacy_hint_count:
+            self._legacy_hint_count = hub.legacy_reports
+            print(
+                f"[BaseRunner] BLE hint: {hub.legacy_reports} report(s) "
+                f"from registered sensors without service data — "
+                f"old firmware? flash dist/klock-sensor-*-v8.uf2",
+                file=sys.stderr, flush=True,
+            )
+
         # Render to the surface.
         t0_draw = _time.monotonic()
         self._draw()
         t1_draw = _time.monotonic()
-        # Slow-tick diagnostic: bump the threshold once per tick to
-        # see breakdown when something regresses.
         if (t1_draw - t0_read) > 0.5:
             print(
                 f"[BaseRunner] tick breakdown: "

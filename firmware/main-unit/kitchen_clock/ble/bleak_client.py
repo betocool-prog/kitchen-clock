@@ -79,10 +79,10 @@ def decode_humidity(raw):
 
 
 def decode_battery_raw(raw):
-    """uint16 little-endian SAADC count → integer. None on short reads.
+    r"""uint16 little-endian SAADC count → integer. None on short reads.
 
     Until the klock firmware drops in the divider formula
-    (\`voltage = vdd * raw / 4096\` or similar), the characteristic
+    (`voltage = vdd * raw / 4096` or similar), the characteristic
     holds raw 12-bit SAADC counts. Tests pin a 3700-count reading to
     match what an 0.9 V bandgap reference on 0.9×vdd gives.
     """

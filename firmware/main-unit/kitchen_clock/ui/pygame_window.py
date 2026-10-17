@@ -35,6 +35,9 @@ class PygameRunner(BaseRunner):
 
     async def run(self):
         try:
+            # Scanner transport (ADR 0012): discovery runs beside
+            # the render loop even in host dev.
+            await self._start_ble()
             while True:
                 for evt in pygame.event.get(pygame.QUIT):
                     return
