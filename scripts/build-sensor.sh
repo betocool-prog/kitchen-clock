@@ -23,10 +23,15 @@ docker run --rm \
   -v "${PROJECT_ROOT}:/work" \
   -v "${DIST_DIR}:/dist" \
   -e ZEPHYR_TOOLCHAIN_PATH=/opt/zephyr-sdk \
+  --entrypoint /bin/bash \
   "$DOCKER_IMAGE" \
-  bash -lc '
+  -lc '
     set -euo pipefail
     source /opt/zephyr-venv/bin/activate
+    # west resolves the workspace by walking up from CWD; the
+    # workspace root (with .west/) is firmware/, one level above
+    # the app, so cd into it first.
+    cd /work/firmware
     west build -b xiao_ble /work/firmware/outdoor-sensor/app
     cp build/zephyr/zephyr.uf2 /dist/outdoor-sensor.uf2
     echo "Built: /dist/outdoor-sensor.uf2"
