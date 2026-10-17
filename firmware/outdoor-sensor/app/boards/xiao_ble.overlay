@@ -5,7 +5,7 @@
  *   1. re-targets the Zephyr printk console from the on-board USB-CDC
  *      to the XIAO's external UART0 pads (P1.11 TX, P1.12 RX).
  *      The host-side adapter is a plain 3.3 V USB-serial dongle
- *      (FTDI / CP2102 / CH340) — see docs/decisions/0004-debug-link.md.
+ *      (FTDI / CP2102 / CH340) — see docs/decisions/0007-debug-console-link.md.
  *   2. enables the BME280 via the bme280_i2c alias on &i2c1.
  *   3. leaves the on-board LEDs (`led0` = P0.26 "Red LED",
  *      `led1` = P0.30 "Green LED", `led2` = P0.06 "Blue LED") at

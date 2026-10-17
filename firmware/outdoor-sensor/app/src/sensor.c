@@ -40,8 +40,8 @@ int kclock_sensor_init(void)
     if (!device_is_ready(bme280)) {
         printk("BME280 device not ready\n");
         printk("  expected wiring on the XIAO nRF52840:\n");
-        printk("    SDA -> D2 (P0.04)  [maps to &i2c1 in devicetree]\n");
-        printk("    SCL -> D3 (P0.05)  [maps to &i2c1 in devicetree]\n");
+        printk("    SDA -> D4 (P0.04)  [maps to &i2c1 in devicetree]\n");
+        printk("    SCL -> D5 (P0.05)  [maps to &i2c1 in devicetree]\n");
         printk("    VDD -> 3V3\n");
         printk("    GND -> GND\n");
         printk("    addr 0x77 (Adafruit STEMMA QT, SDO jumper open)\n");
@@ -101,8 +101,8 @@ int kclock_sensor_init(void)
      * fixed string whether the overlay took effect.
      */
     printk("SAADC ready: %s channel %u, "
-           "gain enum=%d (1=ADC_GAIN_1, 4=ADC_GAIN_1_2, "
-           "etc.), reference enum=%d\n",
+           "gain enum=%d (0=ADC_GAIN_1_6, 5=ADC_GAIN_1_2, "
+           "etc.), reference enum=%d (3=ADC_REF_VDD_1_4)\n",
            adc_batt.dev->name,
            (unsigned)adc_batt.channel_id,
            (int)adc_batt.channel_cfg.gain,
