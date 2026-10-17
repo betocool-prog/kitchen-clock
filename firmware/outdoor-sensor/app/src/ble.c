@@ -65,6 +65,32 @@ static int16_t      last_temp_centi;
 static uint16_t     last_hum_centi;
 static uint16_t     last_batt_raw;
 
+/*
+ * Connection-window model — auto-disconnect after 5 s of accepted
+ * connection. This is the firmware-side half of the lockout fix
+ * described in commit `6c90bf2`'s bowl-out comment: bluez caches a
+ * phantom `Connected: yes` if the peripheral *never* ends the link,
+ * so the next central-side connect attempt quietly dies inside bleed's
+ * conn-acquire path. We schedule a self-disconnect after a grace
+ * period that's long enough for one full read ticker of three chars
+ * but short enough that the next wake window has a clean slate.
+ */
+static struct bt_conn  *current_conn;
+#define CONN_WINDOW_S  5
+
+static void schedule_disconnect(struct k_work *work);
+K_WORK_DELAYABLE_DEFINE(disconnect_work, schedule_disconnect);
+
+static void schedule_disconnect(struct k_work *work)
+{
+    if (current_conn) {
+        printk("BLE: conn window elapsed; "
+               "self-disconnect to clear BlueZ state\n");
+        bt_conn_disconnect(current_conn,
+                           BT_HCI_ERR_REMOTE_USER_TERM_CONN);
+    }
+}
+
 static ssize_t read_temp_cb(struct bt_conn *conn,
                             const struct bt_gatt_attr *attr,
                             void *buf, uint16_t len, uint16_t offset)
@@ -119,11 +145,35 @@ static void on_connected(struct bt_conn *conn, uint8_t err)
     char addr_str[BT_ADDR_LE_STR_LEN];
     bt_addr_le_to_str(bt_conn_get_dst(conn), addr_str, sizeof(addr_str));
     printk("BLE connected: %s (advertising as %s)\n", addr_str, local_name);
+
+    current_conn = conn;
+    /* Auto-disconnect after CONN_WINDOW_S seconds — this is the
+     * lockout-fixing half of the firmware. Without it BlueZ caches
+     * a phantom `Connected: yes` until the radio drops and the
+     * next connect attempt silently fails. Kicking our own link
+     * cleans that cache and re-arms the scanner. */
+    k_work_schedule_for_queue(&k_sys_work_q, &disconnect_work,
+                               K_SECONDS(CONN_WINDOW_S));
 }
 
 static void on_disconnected(struct bt_conn *conn, uint8_t reason)
 {
     printk("BLE disconnected: reason 0x%02x\n", reason);
+    if (current_conn == conn) {
+        current_conn = NULL;
+    }
+    /* Re-arm advertising so the next central-side query finds us
+     * immediately during the same window. Periodic timer below
+     * re-arms every 30 s too; this near-instant re-arm is only
+     * needed after a self-disconnect. */
+    int err = bt_le_adv_start(BT_LE_ADV_CONN, ad, ARRAY_SIZE(ad),
+                              NULL, 0);
+    if (err && err != -EALREADY) {
+        printk("BLE: re-arm advertising after disconnect failed "
+               "(err=%d)\n", err);
+    } else {
+        printk("BLE: advertising re-armed after disconnect\n");
+    }
 }
 
 BT_CONN_CB_DEFINE(conn_callbacks) = {
@@ -205,4 +255,15 @@ void kclock_ble_set_readings(int16_t temp_centiC,
 void kclock_ble_print_local_name(void)
 {
     printk("BLE local-name: %s\n", local_name);
+}
+
+int kclock_ble_arm_advertising(void)
+{
+    int err = bt_le_adv_start(BT_LE_ADV_CONN, ad, ARRAY_SIZE(ad),
+                              NULL, 0);
+    if (err && err != -EALREADY) {
+        printk("BLE: arm advertising failed (err=%d)\n", err);
+        return err;
+    }
+    return 0;
 }
