@@ -43,8 +43,9 @@ fi
 docker run --rm \
     -v "${PROJECT_ROOT}:/work" \
     -v "${DIST_DIR}:/out" \
+    --entrypoint /bin/bash \
     "${DOCKER_IMAGE}" \
-    bash -lc '
+    -lc '
         set -euo pipefail
         cd /opt/pi-gen
 
