@@ -8,18 +8,18 @@
 #include "sensor.h"
 
 #ifndef KCLOCK_SENSOR_FW_VERSION
-#define KCLOCK_SENSOR_FW_VERSION "v7"
+#define KCLOCK_SENSOR_FW_VERSION "v9"
 #endif
 
-/* Periodic measurement cadence: every 30 s the firmware re-samples
- * the BME280 + SAADC and re-arms BLE advertising so the central has
- * a fresh window to connect. The connection-window model is owned
- * by ble.c — on connect ble.c schedules a self-disconnect after 5 s,
- * which fires ON_BLE_CHILDREN on the system work queue and tidies up
- * BlueZ state so the next cycle isn't blocked by stale
- * `Connected: yes`.
+/* Periodic measurement cadence (ADR 0012): every 15 s the firmware
+ * re-samples the BME280 + SAADC and refreshes the advertising
+ * payload (T/H/B ride as ESS 0x181A service data) so a passively
+ * scanning central sees fresh values without a GATT connection.
+ * The GATT service remains advertised connectable for debugging;
+ * on connect ble.c still schedules a self-disconnect after 5 s
+ * to keep BlueZ state clean for the next debug client.
  */
-#define KCLOCK_MEASUREMENT_PERIOD_S  30
+#define KCLOCK_MEASUREMENT_PERIOD_S  15
 
 static struct k_timer measurement_timer;
 static struct k_work  measurement_work;
@@ -92,9 +92,9 @@ int main(void)
                blinky_err);
     }
 
-    /* Periodic measurement: timer fires every 30 s on the system
-     * work queue. Each wake re-samples BME280 + SAADC and re-arms
-     * advertising so the central has a fresh window.
+    /* Periodic measurement: timer fires every 15 s on the system
+     * work queue. Each wake re-samples BME280 + SAADC and refreshes
+     * the broadcast payload so passive scanners see fresh data.
      */
     k_work_init(&measurement_work, on_measurement_work);
     k_timer_init(&measurement_timer, on_measurement_timer, NULL);
@@ -103,7 +103,9 @@ int main(void)
                   K_SECONDS(KCLOCK_MEASUREMENT_PERIOD_S));
 
     printk("kitchen-clock sensor firmware: idle "
-           "(periodic measurement + auto-disconnect)\n");
+           "(periodic measurement every %d s, broadcast payload "
+           "+ auto-disconnect)\n",
+           KCLOCK_MEASUREMENT_PERIOD_S);
 
     /* Idle forever; the periodic timer and BLE connection callbacks
      * drive subsequent work from here. */

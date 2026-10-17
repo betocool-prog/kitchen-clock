@@ -66,6 +66,49 @@ static uint16_t     last_hum_centi;
 static uint16_t     last_batt_raw;
 
 /*
+ * Broadcast payload (ADR 0012): the same T/H/B values that ride
+ * the GATT characteristics are also embedded in the advertising
+ * packet as Environmental-Sensing service data (UUID16 0x181A).
+ * The panel's central then updates by passive scanning and never
+ * opens a GATT connection at all — the connect/disconnect churn
+ * that repeatedly wedged BlueZ/dbus on the Pi Zero W disappears
+ * entirely. The GATT service stays advertised connectable for
+ * nRF-Connect-style debugging.
+ *
+ * Service-data element layout (little-endian, mirroring the GATT
+ * characteristic encodings):
+ *   bytes 0-1   UUID16 0x181A (ESS), little-endian
+ *   byte  2     flags / firmware-version marker (0xNN = vNN)
+ *   bytes 3-4   temperature, int16 centi-°C  (0.01 °C)
+ *   bytes 5-6   humidity,    uint16 centi-%RH (0.01 %RH)
+ *   bytes 7-8   battery,    uint16 raw SAADC counts (0 = no data)
+ *
+ * Keep the flags byte in sync with KCLOCK_SENSOR_FW_VERSION in
+ * main.c so a scanner can tell which payload generation it is
+ * hearing.
+ *
+ * The ESS UUID also rides a "complete list of 16-bit service
+ * UUIDs" element (AD type 0x03) — that is the element BlueZ's
+ * SetDiscoveryFilter(UUIDs=…) matches against (empirically, on
+ * BlueZ 5.72/5.82 the service-data UUID alone is NOT matched),
+ * so the panel's server-side discovery filter keeps neighbour
+ * devices off D-Bus entirely.
+ */
+#define ESS_SVC_DATA_LEN  9      /* 2-byte UUID16 + 7-byte payload */
+#define KCLOCK_BROADCAST_FLAGS  0x09    /* firmware v9 */
+
+static uint8_t svc_data[ESS_SVC_DATA_LEN] = {
+    0x1a, 0x18,                    /* UUID16 0x181A, little-endian */
+    KCLOCK_BROADCAST_FLAGS,
+    0x00, 0x00,                    /* temperature */
+    0x00, 0x00,                    /* humidity */
+    0x00, 0x00,                    /* battery */
+};
+
+/* Complete list of 16-bit service UUIDs — just the ESS UUID. */
+static const uint8_t svc_uuid16[] = { 0x1a, 0x18 };
+
+/*
  * Connection-window model — auto-disconnect after 5 s of accepted
  * connection. This is the firmware-side half of the lockout fix
  * described in commit `6c90bf2`'s bowl-out comment: bluez caches a
@@ -133,7 +176,9 @@ BT_GATT_SERVICE_DEFINE(kclock_svc,
 
 static struct bt_data ad[] = {
     BT_DATA_BYTES(BT_DATA_FLAGS, (BT_LE_AD_GENERAL | BT_LE_AD_NO_BREDR)),
+    BT_DATA(BT_DATA_UUID16_ALL, svc_uuid16, sizeof(svc_uuid16)),
     BT_DATA(BT_DATA_NAME_COMPLETE, local_name, 0),
+    BT_DATA(BT_DATA_SVC_DATA16, svc_data, sizeof(svc_data)),
 };
 
 static void on_connected(struct bt_conn *conn, uint8_t err)
@@ -250,6 +295,29 @@ void kclock_ble_set_readings(int16_t temp_centiC,
     last_temp_centi = temp_centiC;
     last_hum_centi  = hum_centi;
     last_batt_raw   = batt_raw;
+
+    /* Mirror the values into the broadcast payload and refresh the
+     * on-air packet so passive scanners see the new sample without
+     * a connection. Stop + start is the portable way to mutate a
+     * legacy-advertising payload; the ~ms gap is invisible next to
+     * the 15 s measurement cadence. While a GATT debug client is
+     * connected, advertising is already stopped, so the stop leg
+     * returns -EALREADY and the start leg re-arms as usual.
+     */
+    sys_put_le16((uint16_t)temp_centiC, &svc_data[3]);
+    sys_put_le16(hum_centi, &svc_data[5]);
+    sys_put_le16(batt_raw, &svc_data[7]);
+
+    int err = bt_le_adv_stop();
+    if (err && err != -EALREADY) {
+        printk("BLE: adv stop for payload refresh failed (err=%d)\n",
+               err);
+    }
+    err = bt_le_adv_start(BT_LE_ADV_CONN, ad, ARRAY_SIZE(ad),
+                          NULL, 0);
+    if (err && err != -EALREADY) {
+        printk("BLE: payload refresh re-arm failed (err=%d)\n", err);
+    }
 }
 
 void kclock_ble_print_local_name(void)
