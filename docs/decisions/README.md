@@ -31,6 +31,13 @@ significant decisions, the options considered, and the consequences.
   symlink. Standby debug path that doesn't depend on Wi-Fi.
   (Previously proposed USB-OTG `g_serial`; renamed because the
   OTG alternative didn't enumerate reliably.)
+- [0011 — PyGame on the Pi runtime](0011-pygame-on-pi-runtime.md) —
+  Path A: pygame renderer on the host, direct `/dev/fb0` fbdev
+  renderer (Pillow mmap) on the Pi; SDL bypassed on armv6.
+- [0012 — BLE passive-scan transport](0012-ble-passive-scan-transport.md) —
+  T/H/B ride in the advertisement as ESS service data (0x181A);
+  the panel passively scans and never opens a GATT connection.
+  Amends the connect/poll halves of 0004.
 
 ## Considered and declined (not in this repo)
 

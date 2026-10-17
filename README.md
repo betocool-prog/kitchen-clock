@@ -15,12 +15,12 @@ records (ADRs).
 | Architecture | done | ADRs 0001–0009 in `docs/decisions/` |
 | Hardware selection | done | see [`docs/bom.md`](./docs/bom.md) |
 | Dev environment (Docker) | queued | Dockerfile + scripts |
-| Sensor firmware (Zephyr BLE peripheral) | done | builds and ships on nRF52; verified on nRF Connect; UART P1.11/P1.12 debug link |
+| Sensor firmware (Zephyr BLE peripheral) | done | v8: T/H/B broadcast in the advertising packet (ESS 0x181A service data, ADR 0012), 15 s measurement cadence; GATT service kept for debugging; verified on nRF Connect; UART P1.11/P1.12 debug link |
 | Pi SD-card provisioning | **done** | Trixie 32-bit + `prep-sdcard.sh` brings the Pi up on `192.168.0.49/24` over `TelstraD87381-24`, hostname `kclock`, SSH active. Survives reboot via `kclock-wifi-unblock.service` (see ADR 0008). |
 | Bench bring-up | **done** | end-to-end from cold-flash: console login → wifi unblocked → NM associates → static IPv4 → ping WAN. Repeatable across reboots. |
 | Pi app skeleton | queued | Python + LVGL split-pane (next) |
 | Indoor I²C sensor | dropped | replaced by secondary BLE sensor unit |
-| Outdoor BLE client | queued | BlueZ `bluetoothctl` integration, two bonded peers |
+| Outdoor BLE client | done | passive scan (ADR 0012): filtered BleakScanner, no GATT connections; per-field render-cache merge; rate-limited scanner-restart watchdog |
 | Open-Meteo fetch | queued | hourly + daily |
 | 24 h min/max history | queued | ring buffer per sensor |
 | 3D-printed frame | managed in Onshape | user-designed (see ADR 0006) |
