@@ -628,16 +628,31 @@ class TestRunnerRenderCache(unittest.TestCase):
         def _draw(self):
             pass
 
-    def _reading(self, location, source, T=None, H=None, B=None):
+    def _reading(self, location, source, T=None, H=None, B=None,
+                T_err=None, H_err=None, B_err=None):
+        """Build a SensorReading with per-characteristic values or
+        error strings. Pass `T=22.5` for a successful T read;
+        pass `T_err="TimeoutError: > 2.0s"` for a timed-out T.
+        Same for H and B.
+        """
         r = SensorReading(
             mac="00:00:00:00:00:00", name="k-" + location, location=location,
             source=source,
         )
-        if T is not None:
+        if T_err is not None:
+            r.temp_error = T_err
+            r.raw_temp  = b""
+        elif T is not None:
             r.raw_temp = struct.pack("<h", int(T * 100))
-        if H is not None:
+        if H_err is not None:
+            r.hum_error = H_err
+            r.raw_hum   = b""
+        elif H is not None:
             r.raw_hum = struct.pack("<H", int(H * 100))
-        if B is not None:
+        if B_err is not None:
+            r.batt_error = B_err
+            r.raw_batt   = b""
+        elif B is not None:
             r.raw_batt = struct.pack("<H", int(B))
         return r
 
@@ -751,16 +766,29 @@ class TestRunnerWatchdog(unittest.TestCase):
     def tearDown(self):
         self.patcher.stop()
 
-    def _reading(self, location, source, T=None, H=None, B=None):
+    def _reading(self, location, source, T=None, H=None, B=None,
+                T_err=None, H_err=None, B_err=None):
+        """Mirror of `TestRunnerRenderCache._reading`. Build a
+    SensorReading with optional per-characteristic value or
+    error string."""
         r = SensorReading(
             mac="00", name="k-" + location, location=location,
             source=source,
         )
-        if T is not None:
+        if T_err is not None:
+            r.temp_error = T_err
+            r.raw_temp  = b""
+        elif T is not None:
             r.raw_temp = struct.pack("<h", int(T * 100))
-        if H is not None:
+        if H_err is not None:
+            r.hum_error = H_err
+            r.raw_hum   = b""
+        elif H is not None:
             r.raw_hum = struct.pack("<H", int(H * 100))
-        if B is not None:
+        if B_err is not None:
+            r.batt_error = B_err
+            r.raw_batt   = b""
+        elif B is not None:
             r.raw_batt = struct.pack("<H", int(B))
         return r
 
@@ -915,6 +943,144 @@ class _StubClient:
 
     async def read(self):
         return self._q.pop(0)
+
+
+class TestRunnerPartialPromotion(unittest.TestCase):
+    """Partial live readings must not overwrite `last_readings`.
+
+    With the v7 windowed BLE firmware the central can connect
+    inter-window — ble_noise gives the central a 5-second window
+    during which the peripheral might still be in the middle of
+    its own measurement and the GATT chars aren't populated yet.
+    We treat that as a "partial live" tick and surface it in the
+    journal state line, but the *render cache* continues to carry
+    the last fully-good reading, so the panel doesn't flash a
+    half-set.
+    """
+
+    class _NullRunner:
+        from kitchen_clock.runner import BaseRunner as _Base
+
+        def __init__(self, sensors):
+            self.sensors = list(sensors)
+            self.period_s = 0.1
+            self.last_readings = [None] * len(sensors)
+            self.current_readings = [None] * len(sensors)
+            self._ble_tick_counter = 0
+            self._no_live_ticks = 0
+
+        async def _tick(self):
+            from kitchen_clock.runner import BaseRunner
+            return await BaseRunner._tick(self)
+
+        def _draw(self):
+            pass
+
+    def _reading(self, location, source, T=None, H=None, B=None,
+                T_err=None, H_err=None, B_err=None):
+        r = SensorReading(
+            mac="00", name="k-" + location, location=location,
+            source=source,
+        )
+        if T_err is not None:
+            r.temp_error = T_err
+        elif T is not None:
+            r.raw_temp = struct.pack("<h", int(T * 100))
+        if H_err is not None:
+            r.hum_error = H_err
+        elif H is not None:
+            r.raw_hum = struct.pack("<H", int(H * 100))
+        if B_err is not None:
+            r.batt_error = B_err
+        elif B is not None:
+            r.raw_batt = struct.pack("<H", int(B))
+        return r
+
+    def test_partial_live_does_not_overwrite_last_good(self):
+        sensors = [("11", "k1", "outdoor")]
+        runner = self._NullRunner(sensors)
+
+        full = self._reading("outdoor", "live", T=21.5, H=40.0, B=3500)
+        runner.cache = BLEClientCache(lambda s: _StubClient([full]))
+        asyncio.run(runner._tick())
+        self.assertEqual(runner.last_readings[0].temp_c, 21.5)
+        self.assertEqual(runner.last_readings[0].hum_percent, 40.0)
+        self.assertEqual(runner.last_readings[0].batt_raw, 3500)
+
+        # Tick 2: T succeeded, H and B timed out.
+        partial = self._reading(
+            "outdoor", "live", T=22.5,
+            H_err="TimeoutError: > 2.0s",
+            B_err="TimeoutError: > 2.0s",
+        )
+        runner.cache = BLEClientCache(lambda s: _StubClient([partial]))
+        asyncio.run(runner._tick())
+
+        # Render cache is unchanged.
+        self.assertEqual(runner.last_readings[0].temp_c, 21.5)
+        self.assertEqual(runner.last_readings[0].hum_percent, 40.0)
+        self.assertEqual(runner.last_readings[0].batt_raw, 3500)
+
+        # But the journal state is the partial one — user can see it.
+        self.assertEqual(runner.current_readings[0].temp_c, 22.5)
+        self.assertIsNone(runner.current_readings[0].hum_percent)
+        self.assertIsNone(runner.current_readings[0].batt_raw)
+
+    def test_partial_live_then_full_live_promotes_latest_full(self):
+        sensors = [("11", "k1", "outdoor")]
+        runner = self._NullRunner(sensors)
+
+        full1 = self._reading("outdoor", "live", T=21.5, H=40.0, B=3500)
+        runner.cache = BLEClientCache(lambda s: _StubClient([full1]))
+        asyncio.run(runner._tick())
+
+        partial = self._reading(
+            "outdoor", "live", T=22.5,
+            H_err="TimeoutError: > 2.0s",
+            B_err="TimeoutError: > 2.0s",
+        )
+        runner.cache = BLEClientCache(lambda s: _StubClient([partial]))
+        asyncio.run(runner._tick())
+
+        # The full tick after the partial promotes the new full values.
+        full2 = self._reading("outdoor", "live", T=24.0, H=50.0, B=3700)
+        runner.cache = BLEClientCache(lambda s: _StubClient([full2]))
+        asyncio.run(runner._tick())
+
+        self.assertEqual(runner.last_readings[0].temp_c, 24.0)
+        self.assertEqual(runner.last_readings[0].hum_percent, 50.0)
+        self.assertEqual(runner.last_readings[0].batt_raw, 3700)
+
+    def test_is_complete_helper(self):
+        """`_is_complete()` gates whether a reading is renderable."""
+        from kitchen_clock.runner import _is_complete as is_complete
+        full = self._reading("outdoor", "live", T=21.5, H=40.0, B=3500)
+        self.assertTrue(is_complete(full))
+
+        no_temp = self._reading(
+            "outdoor", "live",
+            T_err="TimeoutError: > 2.0s",
+            H=40.0, B=3500,
+        )
+        self.assertFalse(is_complete(no_temp))
+
+        no_hum = self._reading(
+            "outdoor", "live", T=21.5,
+            H_err="TimeoutError: > 2.0s",
+            B=3500,
+        )
+        self.assertFalse(is_complete(no_hum))
+
+        no_batt = self._reading(
+            "outdoor", "live", T=21.5, H=40.0,
+            B_err="TimeoutError: > 2.0s",
+        )
+        self.assertFalse(is_complete(no_batt))
+
+        # A connect-fail: source != "live"/"mock", so reading is
+        # not promoted even before _is_complete's error check.
+        failed = self._reading("outdoor", "connect-fail:ConnectionError")
+        self.assertFalse(is_complete(failed))
 
 
 if __name__ == "__main__":    unittest.main()

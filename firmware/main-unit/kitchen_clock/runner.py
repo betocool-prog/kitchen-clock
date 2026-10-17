@@ -29,6 +29,26 @@ from .ble.watchdog import (
 SensorTuple = Tuple[str, str, str]
 
 
+def _is_complete(reading) -> bool:
+    """True when every GATT char read came back and the connection
+    itself was established.
+
+    Module-level so `_NullRunner` test containers can resolve it
+    through `runner._is_complete` without inheriting the full
+    `BaseRunner` machinery. Equivalently: SensorReading with
+    `source in ("live", "mock")` and no error string on any of
+    the three slots — the error strings are set by `_safe_read`
+    when a per-char read timed out or otherwise failed, so an
+    empty string here means the read succeeded.
+    """
+    return (
+        reading.source in ("live", "mock")
+        and not reading.temp_error
+        and not reading.hum_error
+        and not reading.batt_error
+    )
+
+
 async def safe_read(client) -> SensorReading:
     """Run a client's read() coroutine and surface exceptions as a
     SensorReading with source='error:...'. The origin sensor tuple
@@ -139,18 +159,27 @@ class BaseRunner:
         # Promote live/mock fresh readings into the render cache;
         # leave prior live readings in place for failed attempts so
         # the panel doesn't blank on a single dropped BLE ack.
-        any_live = False
+        # We additionally restrict promotion to fully-complete
+        # readings: every per-characteristic read must have
+        # succeeded. Partial live readings (some per-char timeout)
+        # are surfaced in the journal state so the user can see
+        # them, but DO NOT replace the cached last good reading.
+        # This is what the user asked for after the
+        # BLE-windowed firmware: don't flash a half-set onto the
+        # panel until a fully-fresh sample has come through.
+        any_complete = False
         for i, r in enumerate(self.current_readings):
             if r is None:
                 continue
-            if r.source in ("live", "mock"):
+            if r.source in ("live", "mock") and _is_complete(r):
                 self.last_readings[i] = r
-                any_live = True
+                any_complete = True
         # Watchdog bookkeeping: count only ticks where *no* tile
-        # produced a fresh live reading. As soon as one tile lives,
-        # the counter resets — a single good read is enough to keep
-        # us out of the bluetooth.service restart path.
-        if any_live:
+        # produced a fresh LIVE reading. Partial reads (any_complete
+        # is False) reset the counter too — partial data means we
+        # *connected* and we're back in business; only the floor of
+        # zero tiles live counts as a real outage.
+        if any_complete:
             self._no_live_ticks = 0
         else:
             self._no_live_ticks += 1
