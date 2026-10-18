@@ -4,7 +4,9 @@
 #include <stdint.h>
 
 int  kclock_ble_init(void);
-void kclock_ble_set_readings(int16_t temp_centiC, uint16_t hum_centi, uint16_t batt_raw);
+void kclock_ble_set_readings(int16_t temp_centiC,
+                             uint16_t hum_centi,
+                             uint16_t batt_mv);
 void kclock_ble_print_local_name(void);
 
 /* Re-arm BLE advertising. Used on each periodic wake window from

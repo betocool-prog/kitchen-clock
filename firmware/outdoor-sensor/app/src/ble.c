@@ -63,7 +63,7 @@ static const struct bt_uuid_128 kclock_batt_raw_uuid = {
 static char         local_name[KCLOCK_LOCAL_NAME_MAX];
 static int16_t      last_temp_centi;
 static uint16_t     last_hum_centi;
-static uint16_t     last_batt_raw;
+static uint16_t     last_batt_mv;
 
 /*
  * Broadcast payload (ADR 0012): the same T/H/B values that ride
@@ -81,7 +81,9 @@ static uint16_t     last_batt_raw;
  *   byte  2     flags / firmware-version marker (0xNN = vNN)
  *   bytes 3-4   temperature, int16 centi-°C  (0.01 °C)
  *   bytes 5-6   humidity,    uint16 centi-%RH (0.01 %RH)
- *   bytes 7-8   battery,    uint16 raw SAADC counts (0 = no data)
+ *   bytes 7-8   battery,    uint16 millivolts (firmware v10's
+ *               linear SAADC calibration: 1102 ticks = 4010 mV;
+ *               0 = "no data")
  *
  * Keep the flags byte in sync with KCLOCK_SENSOR_FW_VERSION in
  * main.c so a scanner can tell which payload generation it is
@@ -95,7 +97,7 @@ static uint16_t     last_batt_raw;
  * devices off D-Bus entirely.
  */
 #define ESS_SVC_DATA_LEN  9      /* 2-byte UUID16 + 7-byte payload */
-#define KCLOCK_BROADCAST_FLAGS  0x09    /* firmware v9 */
+#define KCLOCK_BROADCAST_FLAGS  0x0A    /* firmware v10 */
 
 static uint8_t svc_data[ESS_SVC_DATA_LEN] = {
     0x1a, 0x18,                    /* UUID16 0x181A, little-endian */
@@ -155,7 +157,7 @@ static ssize_t read_batt_cb(struct bt_conn *conn,
                             void *buf, uint16_t len, uint16_t offset)
 {
     return bt_gatt_attr_read(conn, attr, buf, len, offset,
-                             &last_batt_raw, sizeof(last_batt_raw));
+                             &last_batt_mv, sizeof(last_batt_mv));
 }
 
 BT_GATT_SERVICE_DEFINE(kclock_svc,
@@ -171,7 +173,7 @@ BT_GATT_SERVICE_DEFINE(kclock_svc,
     BT_GATT_CHARACTERISTIC(&kclock_batt_raw_uuid.uuid,
                            BT_GATT_CHRC_READ,
                            BT_GATT_PERM_READ,
-                           read_batt_cb, NULL, &last_batt_raw),
+                           read_batt_cb, NULL, &last_batt_mv),
 );
 
 static struct bt_data ad[] = {
@@ -290,11 +292,11 @@ int kclock_ble_init(void)
 
 void kclock_ble_set_readings(int16_t temp_centiC,
                              uint16_t hum_centi,
-                             uint16_t batt_raw)
+                             uint16_t batt_mv)
 {
     last_temp_centi = temp_centiC;
     last_hum_centi  = hum_centi;
-    last_batt_raw   = batt_raw;
+    last_batt_mv    = batt_mv;
 
     /* Mirror the values into the broadcast payload and refresh the
      * on-air packet so passive scanners see the new sample without
@@ -306,7 +308,7 @@ void kclock_ble_set_readings(int16_t temp_centiC,
      */
     sys_put_le16((uint16_t)temp_centiC, &svc_data[3]);
     sys_put_le16(hum_centi, &svc_data[5]);
-    sys_put_le16(batt_raw, &svc_data[7]);
+    sys_put_le16(batt_mv, &svc_data[7]);
 
     int err = bt_le_adv_stop();
     if (err && err != -EALREADY) {

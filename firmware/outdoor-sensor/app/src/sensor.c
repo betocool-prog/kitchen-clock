@@ -147,7 +147,7 @@ int kclock_sensor_read(int16_t *temp_centiC, uint16_t *hum_centi)
 #endif
 }
 
-int kclock_sensor_read_battery_raw(uint16_t *raw_out)
+int kclock_sensor_read_battery_mv(uint16_t *mv_out)
 {
 #if DT_NODE_HAS_STATUS(DT_PATH(zephyr_user), okay)
     int16_t sample = 0;
@@ -163,7 +163,7 @@ int kclock_sensor_read_battery_raw(uint16_t *raw_out)
     int err = adc_read_dt(&adc_batt, &seq);
     if (err < 0) {
         printk("SAADC read failed (%d) — battery reads return 0\n", err);
-        *raw_out = 0;
+        *mv_out = 0;
         return 0;        /* non-fatal: BLE still works */
     }
 
@@ -178,10 +178,18 @@ int kclock_sensor_read_battery_raw(uint16_t *raw_out)
         sample = 4095;
     }
 
-    *raw_out = (uint16_t)sample;
+    /* Ticks → millivolts, linear calibration (bench-measured
+     * 2026-10-18, firmware v10): 1102 ticks = 4010 mV, i.e.
+     *   mV = ticks × 4010 / 1102   (≈ 3.639 mV per tick)
+     * through the 1 MΩ/510 kΩ divider on AIN7 (P0.31) with
+     * gain 1/6 and VDD/4 reference (see boards/xiao_ble.overlay).
+     * Rounded integer math; a 12-bit sample tops out well below
+     * uint16. 0 stays 0 — the "no data" sentinel.
+     */
+    *mv_out = (uint16_t)(((uint32_t)sample * 4010u + 551u) / 1102u);
     return 0;
 #else
-    *raw_out = 0;
+    *mv_out = 0;
     return 0;
 #endif
 }

@@ -8,7 +8,7 @@
 #include "sensor.h"
 
 #ifndef KCLOCK_SENSOR_FW_VERSION
-#define KCLOCK_SENSOR_FW_VERSION "v9"
+#define KCLOCK_SENSOR_FW_VERSION "v10"
 #endif
 
 /* Periodic measurement cadence (ADR 0012): every 15 s the firmware
@@ -28,7 +28,7 @@ static void do_sample_and_publish(void)
 {
     int16_t  temp_centi = 0;
     uint16_t hum_centi   = 0;
-    uint16_t batt_raw    = 0;
+    uint16_t batt_mv    = 0;
 
     if (kclock_sensor_read(&temp_centi, &hum_centi) == 0) {
         printk("sample: %d.%02d C, %u.%02u %%RH\n",
@@ -37,10 +37,9 @@ static void do_sample_and_publish(void)
     } else {
         printk("sample: BME280 read failed; pushing 0.0 values to GATT\n");
     }
-    kclock_sensor_read_battery_raw(&batt_raw);
-    printk("sample: SAADC raw = %u (panel: 'B: %u ADC')\n",
-           batt_raw, batt_raw);
-    kclock_ble_set_readings(temp_centi, hum_centi, batt_raw);
+    kclock_sensor_read_battery_mv(&batt_mv);
+    printk("sample: battery = %u mV\n", batt_mv);
+    kclock_ble_set_readings(temp_centi, hum_centi, batt_mv);
 }
 
 static void on_measurement_work(struct k_work *work)
