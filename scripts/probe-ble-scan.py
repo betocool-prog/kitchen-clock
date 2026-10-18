@@ -54,7 +54,7 @@ def main() -> int:
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    ap.add_argument("--sensor", choices=("outdoor", "indoor", "all"),
+    ap.add_argument("--sensor", choices=("outside", "inside", "all"),
                     default="all",
                     help="Restrict to one role from the registry.")
     ap.add_argument("--duration", type=float, default=20.0,

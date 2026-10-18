@@ -18,20 +18,21 @@
 #   python scripts/probe-ble-devices.py --filter kclock
 #
 # and replace the placeholder entry below with the discovered
-# `(mac, name, location)` triplet. Sensible to keep `'outdoor'` /
-# `'indoor'` as the location strings because they flow into UI
-# labelling.
+# `(mac, name, location)` triplet. Keep `'outside'` / `'inside'`
+# as the location strings — they flow into UI labelling (layout v5
+# renders the title as "Outside" / "Inside") and the runner's
+# journal state lines.
 
 KCLOCK_SENSORS = (
     # Discovered on 2026-08-30 from `kclock-d0`. RSSI blank on
     # bleak 3.x unless we read details['rssi'].
-    ("D0:44:B3:EE:AC:9F", "kclock-d0", "outdoor"),
+    ("D0:44:B3:EE:AC:9F", "kclock-d0", "outside"),
 
-    # Discovered on 2026-08-30. Labelled "indoor" by convention;
-    # swap with the outdoor entry above if the physical placement
+    # Discovered on 2026-08-30. Labelled "inside" by convention;
+    # swap with the outside entry above if the physical placement
     # reverses later. RSSI blank on bleak 3.x unless we read
     # `details['rssi']`.
-    ("D3:B3:63:7C:F2:30", "kclock-d3", "indoor"),
+    ("D3:B3:63:7C:F2:30", "kclock-d3", "inside"),
 )
 
 

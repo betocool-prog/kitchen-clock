@@ -4,10 +4,11 @@ The GATT characteristic layout mirrors firmware/outdoor-sensor/app/src/ble.c.
 Tests at firmware/main-unit/tests/test_ble_decode.py exercise the decode
 pipeline without any bluetooth hardware.
 
-Characteristic shape (matches ble.c):
+Characteristic shape (matches ble.c, firmware v10):
   temperature   : int16 little-endian, 0.01 °C.
   humidity      : uint16 little-endian, 0.01 %RH.
-  battery-raw   : uint16 little-endian, raw SAADC counts.
+  battery-mV    : uint16 little-endian, millivolts (linear calibration
+                  on the sensor: mV = ticks × 4010 / 1102).
 
 The "battery-raw" carries the SAADC reading on the peripheral. Until
 the klock firmware drops in a divider and a vdd-vs-divider scaling
@@ -78,13 +79,14 @@ def decode_humidity(raw):
     return None if v is None else v / HUM_SCALE_RH
 
 
-def decode_battery_raw(raw):
-    r"""uint16 little-endian SAADC count → integer. None on short reads.
+def decode_battery_mv(raw):
+    r"""uint16 little-endian millivolts → integer. None on short reads.
 
-    Until the klock firmware drops in the divider formula
-    (`voltage = vdd * raw / 4096` or similar), the characteristic
-    holds raw 12-bit SAADC counts. Tests pin a 3700-count reading to
-    match what an 0.9 V bandgap reference on 0.9×vdd gives.
+    The conversion from SAADC ticks to millivolts lives in the sensor
+    firmware (v10): a linear calibration, 1102 ticks = 4010 mV, i.e.
+    `mV = ticks × 4010 / 1102`. The panel's battery line renders
+    this as volts ("3.33V"). A value of 0 keeps the "no data"
+    sentinel semantics and maps to None.
     """
     return _read_int(raw, "<H")
 
@@ -118,22 +120,18 @@ class SensorReading:
         return None if v is None else v
 
     @property
-    def batt_raw(self) -> Optional[int]:
-        """Raw SAADC reading from the battery characteristic.
+    def batt_mv(self) -> Optional[int]:
+        """Battery millivolts, decoded from firmware v10's linear
+        calibration (1102 ticks = 4010 mV, done sensor-side).
 
-        Until the klock firmware scales it into a voltage, this
-        is the 12-bit ADC count the firmware wrote into the
-        characteristic (a non-decoded-in-Python integer).
-
-        Sentinel: 0 means "no data yet" — the firmware returns
-        this when the ADC hasn't initialised, in particular
-        before the divider on the bench is wired up. We surface
-        that as `None` (i.e. `n/a` on the panel) instead of a
-        misleading-precise "0 ADC".
+        Sentinel: 0 means "no data yet" — the firmware returns this
+        when the ADC hasn't initialised. We surface that as `None`
+        (i.e. `n/a` on the panel) instead of a misleading-precise
+        "0V".
         """
         if self.batt_error:
             return None
-        v = decode_battery_raw(self.raw_batt)
+        v = decode_battery_mv(self.raw_batt)
         if v is None:
             return None
         if v == 0:

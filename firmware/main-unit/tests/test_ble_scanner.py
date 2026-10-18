@@ -22,8 +22,8 @@ from kitchen_clock.runner import _any_field_ok, merge_reading
 
 
 def make_payload(flags=0x08, temp_centi=2258, hum_centi=6009,
-                 batt_raw=1109):
-    return struct.pack("<BhhH", flags, temp_centi, hum_centi, batt_raw)
+                 batt_mv=1109):
+    return struct.pack("<BhhH", flags, temp_centi, hum_centi, batt_mv)
 
 
 class TestDecodeServiceData(unittest.TestCase):
@@ -32,15 +32,15 @@ class TestDecodeServiceData(unittest.TestCase):
         self.assertEqual(d["flags"], 0x08)
         self.assertAlmostEqual(d["temp_c"], 22.58)
         self.assertAlmostEqual(d["hum_percent"], 60.09)
-        self.assertEqual(d["batt_raw"], 1109)
+        self.assertEqual(d["batt_mv"], 1109)
 
     def test_negative_temperature(self):
         d = decode_service_data(make_payload(temp_centi=-550))
         self.assertAlmostEqual(d["temp_c"], -5.5)
 
     def test_battery_sentinel_zero_maps_to_none(self):
-        d = decode_service_data(make_payload(batt_raw=0))
-        self.assertIsNone(d["batt_raw"])
+        d = decode_service_data(make_payload(batt_mv=0))
+        self.assertIsNone(d["batt_mv"])
         self.assertAlmostEqual(d["temp_c"], 22.58)
 
     def test_short_payload_is_none(self):
@@ -78,7 +78,7 @@ class TestScannerHub(unittest.TestCase):
         self.assertIsNotNone(age)
         self.assertAlmostEqual(r.temp_c, 22.58, places=2)
         self.assertAlmostEqual(r.hum_percent, 60.09, places=2)
-        self.assertEqual(r.batt_raw, 1109)
+        self.assertEqual(r.batt_mv, 1109)
         self.assertEqual(hub.report_count, 1)
 
     def test_report_lands_via_name_when_mac_unknown(self):
@@ -165,18 +165,18 @@ class TestMergeReading(unittest.TestCase):
         reading = _mk_reading(temp=2258, hum=6009, batt=1109)
         merged = merge_reading(new, reading)
         self.assertEqual(merged.raw_temp, struct.pack("<h", 2258))
-        self.assertEqual(merged.batt_raw, 1109)
+        self.assertEqual(merged.batt_mv, 1109)
 
     def test_failed_field_keeps_previous_value(self):
         old = _mk_reading(temp=2258, hum=6009, batt=1109)
         # New report: fresh temp, battery read failed (empty raw).
         new = _mk_reading(temp=2350, hum=6100, batt=None,
-                           batt_raw=b"", batt_error="TimeoutError")
+                           batt_mv=b"", batt_error="TimeoutError")
         merged = merge_reading(old, new)
         self.assertEqual(merged.temp_c, 23.5)
         self.assertEqual(merged.hum_percent, 61.0)
         # Battery keeps the old good raw bytes.
-        self.assertEqual(merged.batt_raw, 1109)
+        self.assertEqual(merged.batt_mv, 1109)
         self.assertEqual(merged.batt_error, "")
 
     def test_battery_sentinel_refreshes_to_n_a(self):
@@ -187,18 +187,18 @@ class TestMergeReading(unittest.TestCase):
         new = _mk_reading(temp=2350, hum=6100, batt=0)
         merged = merge_reading(old, new)
         self.assertEqual(merged.temp_c, 23.5)
-        self.assertIsNone(merged.batt_raw)
+        self.assertIsNone(merged.batt_mv)
 
 
 def _mk_reading(temp=None, hum=None, batt=None,
-                batt_raw=None, batt_error=""):
+                batt_mv=None, batt_error=""):
     from kitchen_clock.ble.bleak_client import SensorReading
     raw_t = b"" if temp is None else struct.pack("<h", temp)
     raw_h = b"" if hum is None else struct.pack("<H", hum)
-    if batt_raw is None:
+    if batt_mv is None:
         raw_b = b"" if batt is None else struct.pack("<H", batt)
     else:
-        raw_b = batt_raw
+        raw_b = batt_mv
     return SensorReading(
         mac="D0:44:B3:EE:AC:9F", name="kclock-d0", location="outdoor",
         raw_temp=raw_t, raw_hum=raw_h, raw_batt=raw_b,

@@ -13,6 +13,25 @@ bypassing SDL entirely. The framebuffer is what the HDMI panel
 displays verbatim — exactly the same surface the kernel boot
 splash uses.
 
+Layout (v5, docs/design/layout-v5.png — designed blind via
+`scripts/render-layout-mockup.py`, numerically audited):
+
+  - three 5-px white divider lines: x=700 (vertical, full height),
+    y=123 across the left box, y=300 across the right box
+  - top-left box: the date, "Sun, 18 Oct 2026", width-fitted
+  - bottom-left box: the time, "10:32 PM", width-fitted
+  - top-right box: the Outside sensor block — 4 lines
+    ("Outside" / "Temp: 34.2 °C" / "Rel. Hum.: 23.3%" /
+    "Battery: 3.33V"), uniform font sized to the widest worst-case
+    line, 1.35-em baseline grid, block centred
+  - bottom-right box: the Inside block, same treatment
+
+Font sizes are constants (computed once at init from worst-case
+representative strings, since DejaVu digits are not tabular), so
+nothing jumps size day to day. Missing values render as red "n/a"
+lines; a tile that has never seen data still renders its title and
+three n/a lines.
+
 API mirrors `PygameRunner` so `BaseRunner` keeps a single code
 path. The two runners are interchangeable at the call site.
 """
@@ -42,10 +61,16 @@ except ImportError:                              # noqa: F401
 
 from ..runner import BaseRunner
 from ..ble.bleak_client import SensorReading
+from . import textfit
 
 
 FB_PATH = "/dev/fb0"
 SYSFB = "/sys/class/graphics/fb0"
+
+# Per-tick journal chatter (tick started / draw entered / drew in)
+# is gated behind this env var; the slow-tick breakdown (>0.5 s)
+# always prints — it's a regression signal, not chatter.
+DEBUG_DRAW_ENV = "KITCHEN_CLOCK_DEBUG_DRAW"
 
 
 def _read_sysfs(name):
@@ -64,68 +89,6 @@ def discover_fb0():
     except FileNotFoundError:
         pitch = x * (bpp // 8)
     return x, y, bpp, pitch
-
-
-def load_fonts():
-    """Return (font_big, font_small) — both PIL ImageFont instances.
-
-    Sizes have been tuned to fit the EastRising 9" panel (1024x600)
-    with two vertically-stacked sensor tiles. See the layout in
-    `_draw` for the relationship between font sizes and row offsets.
-    """
-    candidates = (
-        # Debian pack names (DejaVu/Liberation standard Trixie paths)
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-        "/usr/share/fonts/truetype/dejavu/DejaVuSerif.ttf",
-        "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
-        "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
-        # Fedora-ish paths and Pi-camera-stack fallbacks
-        "/usr/share/fonts/TTF/DejaVuSans.ttf",
-        "/usr/share/fonts/TTF/LiberationSans-Bold.ttf",
-    )
-    for path in candidates:
-        if not Path(path).exists():
-            continue
-        try:
-            return (
-                ImageFont.truetype(path, 48),
-                ImageFont.truetype(path, 28),
-            )
-        except Exception:
-            continue
-    fallback = ImageFont.load_default()
-    print(
-        "[FbdevRunner] WARNING: no TrueType fonts found; falling back "
-        "to PIL default. apt-get install fonts-dejavu-core for "
-        "readable text.",
-        file=__import__("sys").stderr,
-    )
-    return fallback, fallback
-
-
-def load_clock_font(size: int = 96):
-    """Sized for the wall-clock face (HH:MM:SS).
-
-    Bigger than `font_big` so the seconds-changed-in-real-time
-    is readable from across the kitchen. We re-resolve the path
-    instead of caching because PIL's `truetype` doesn't expose
-    a cheap sizing API in the version bundled on Trixie.
-    """
-    candidates = (
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-        "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
-        "/usr/share/fonts/TTF/DejaVuSans-Bold.ttf",
-        "/usr/share/fonts/TTF/LiberationSans-Bold.ttf",
-    )
-    for path in candidates:
-        if not Path(path).exists():
-            continue
-        try:
-            return ImageFont.truetype(path, size)
-        except Exception:
-            continue
-    return ImageFont.load_default()
 
 
 def rgb_to_framebuffer(rgb_bytes: bytes, bpp: int,
@@ -157,7 +120,7 @@ def rgb_to_framebuffer(rgb_bytes: bytes, bpp: int,
 
 
 def _rgb_to_framebuffer_numpy(rgb_bytes: bytes, bpp: int,
-                             width: int, height: int) -> bytes:
+                              width: int, height: int) -> bytes:
     """Vectorised RGB→framebuffer packing via numpy."""
     rgb = np.frombuffer(rgb_bytes, dtype=np.uint8).reshape(height, width, 3)
     if bpp == 16:
@@ -183,7 +146,7 @@ def _rgb_to_framebuffer_numpy(rgb_bytes: bytes, bpp: int,
 
 
 def _rgb_to_framebuffer_pure(rgb_bytes: bytes, bpp: int,
-                            width: int, height: int) -> bytes:
+                             width: int, height: int) -> bytes:
     """Pure-Python RGB→framebuffer packing (slow on Pi Zero W)."""
     order = os.environ.get("KITCHEN_CLOCK_FB_BYTE_ORDER", "BGRX").upper()
     n = width * height
@@ -223,7 +186,21 @@ def _rgb_to_framebuffer_pure(rgb_bytes: bytes, bpp: int,
 
 
 class FbdevRunner(BaseRunner):
-    """Path A's fbdev renderer on the Pi runtime."""
+    """Path A's fbdev renderer on the Pi runtime — layout v5."""
+
+    # Worst-case representative fit strings (measured on DejaVu
+    # Bold: "Wed"/"May" are the widest name abbreviations, '4'/'0'
+    # the widest digits, "Rel. Hum.: 100.0%" the widest sensor
+    # line — see textfit.py and the design loop in
+    # docs/design/ for how these were derived).
+    DATE_FIT_WORST = "Wed, 44 May 2026"
+    TIME_FIT_WORST = "44:44 PM"
+    SENSOR_FIT_LINES = (
+        "Outside",
+        "Temp: -12.3 °C",
+        "Rel. Hum.: 100.0%",
+        "Battery: 4.99V",
+    )
 
     def __init__(self, *, make_client, sensors, period_s: float = 2.0,
                  time_formatter=None):
@@ -248,21 +225,39 @@ class FbdevRunner(BaseRunner):
             self.fd, size, mmap.MAP_SHARED,
             mmap.PROT_WRITE | mmap.PROT_READ,
         )
-        self.img = Image.new("RGB", (self.width, self.height), (0, 0, 0))
+        self.img = Image.new("RGB", (self.width, self.height),
+                             textfit.BG)
         self.draw = ImageDraw.Draw(self.img)
-        self.font_big, self.font_small = load_fonts()
         self.time_formatter = time_formatter
-        # Clock face uses larger digits than the body font. Sized so
-        # 'HH:MM:SS' fits the 1024 px panel with margin; must coexist
-        # with the date row directly below.
-        self.font_clock = self._load_clock_font()
+
+        # Layout v5: plans hold fixed font sizes and positions so
+        # the per-frame draw is pure text placement.
+        font_path = textfit.resolve_font_path()
+        regions = textfit.divided_regions()
+        self._date_plan = textfit.fit_single(
+            font_path, self.DATE_FIT_WORST, regions["left_top"],
+        )
+        self._time_plan = textfit.fit_single(
+            font_path, self.TIME_FIT_WORST, regions["left_bottom"],
+        )
+        self._sensor_plans = [
+            textfit.fit_block(font_path, self.SENSOR_FIT_LINES,
+                              regions["right_top"]),
+            textfit.fit_block(font_path, self.SENSOR_FIT_LINES,
+                              regions["right_bottom"]),
+        ]
+        self._ink = textfit.InkCache()
+        print(
+            f"[FbdevRunner] layout v5: date {self._date_plan['size']} pt, "
+            f"time {self._time_plan['size']} pt, "
+            f"sensors {self._sensor_plans[0]['size']} pt "
+            f"(font {font_path})",
+            file=__import__("sys").stderr, flush=True,
+        )
 
     async def run(self):
         import sys
-        # flush=True on every runtime print: when this runner runs in
-        # the background of an SSH session (`&`), the parent shell
-        # may exit before the runner's stdio is flushed and we'd lose
-        # the timing trace we need for first-tick diagnostics.
+        debug = bool(os.environ.get(DEBUG_DRAW_ENV))
         print("[FbdevRunner] run() entered", file=sys.stderr, flush=True)
         try:
             # Scanner transport (ADR 0012): discovery runs beside the
@@ -271,19 +266,20 @@ class FbdevRunner(BaseRunner):
             tick_n = 0
             while True:
                 t_loops = _monotonic()
-                print(
-                    f"[FbdevRunner] tick #{tick_n + 1} starting",
-                    file=sys.stderr, flush=True,
-                )
+                if debug:
+                    print(
+                        f"[FbdevRunner] tick #{tick_n + 1} starting",
+                        file=sys.stderr, flush=True,
+                    )
                 await self._tick()
                 t_ticked = _monotonic()
                 tick_n += 1
-                print(
-                    f"[FbdevRunner] tick #{tick_n} drew in "
-                    f"{t_ticked - t_loops:.3f}s",
-                    file=sys.stderr,
-                    flush=True,
-                )
+                if debug:
+                    print(
+                        f"[FbdevRunner] tick #{tick_n} drew in "
+                        f"{t_ticked - t_loops:.3f}s",
+                        file=sys.stderr, flush=True,
+                    )
                 await asyncio.sleep(self.period_s)
         finally:
             try:
@@ -291,49 +287,38 @@ class FbdevRunner(BaseRunner):
             finally:
                 os.close(self.fd)
 
-    def _load_clock_font(self):
-        return load_clock_font(96)
-
     def _draw(self):
         import sys
-        print("[FbdevRunner] _draw entered", file=sys.stderr, flush=True)
+        debug = bool(os.environ.get(DEBUG_DRAW_ENV))
+        if debug:
+            print("[FbdevRunner] _draw entered", file=sys.stderr,
+                  flush=True)
         t0 = _monotonic()
+        tf = textfit
+
         self.draw.rectangle(
-            (0, 0, self.width, self.height), fill=(0, 0, 0),
+            (0, 0, self.width, self.height), fill=tf.BG,
         )
-        # Top: BIG AWST clock + date row.
-        # Bottom: vertically stacked sensor tiles.
-        #
-        # Layout maths (EastRising 9" panel, 1024x600):
-        #   font_big bbox ~74 px  (size 48 + ascent + descent + leading)
-        #   font_small bbox ~52 px (size 28 + ascent + descent + leading)
-        #   font_clock at size 96 has bbox ~150 px.
-        #   clock+date strip = 8 (top margin) + ~150 (clock) + ~6 (gap)
-        #     + ~52 (date) + 8 (gap) = 224 px.
-        #   remaining 600-224 = 376 px for two tiles + a small gap.
-        clock_top_y = 8
-        date_y = 162                    # immediately below the clock
-        clock_face_x = self.width // 2  # we'll right-justify by bbox
+        tf.draw_dividers(self.draw)
+
+        # Top-left: date. Bottom-left: time.
         if self.time_formatter is not None:
-            self._draw_clock(clock_top_y, clock_face_x)
-        else:
-            # Static placeholder when the time formatter isn't
-            # wired up — preserves the project's "kitchen-clock —
-            # library" tagline from before the AWST work.
-            self.draw.text(
-                (20, 8), "kitchen-clock — library",
-                fill=(255, 255, 255), font=self.font_big,
-            )
-        tiles_y = 224
-        tile_h = 180                    # 224 + 180 + 8 + 180 = 592, leaves 8 bottom margin
-        # Render a tile per registered sensor, even when no live
-        # reading has landed yet. Without this the panel shows
-        # only the clock on a cold start and any BLE outage.
+            tf.draw_fitted(self.draw, self._date_plan,
+                           self.time_formatter.date(), self._ink)
+            tf.draw_fitted(self.draw, self._time_plan,
+                           self.time_formatter.clock(), self._ink)
+
+        # Right column: one sensor block per registered sensor, in
+        # registry order (layout v5 has two right boxes).
         for i, sensor in enumerate(self.sensors):
-            last_r = self.last_readings[i] if i < len(self.last_readings) else None
-            cur_r = self.current_readings[i] if i < len(self.current_readings) else None
-            self._draw_tile(
-                sensor, i, last_r, cur_r, base_y=tiles_y + i * tile_h,
+            if i >= len(self._sensor_plans):
+                break
+            plan = self._sensor_plans[i]
+            last_r = (self.last_readings[i]
+                      if i < len(self.last_readings) else None)
+            tf.draw_fitted_block(
+                self.draw, plan,
+                self._sensor_block_lines(sensor, last_r),
             )
         t_paint = _monotonic()
 
@@ -345,94 +330,42 @@ class FbdevRunner(BaseRunner):
         self.mm[: len(packed)] = packed
         t_blit = _monotonic()
 
-        print(
-            f"[FbdevRunner] _draw breakdown tick: "
-            f"paint={(t_paint - t0):.3f}s "
-            f"tobytes={(t_tobytes - t_paint):.3f}s "
-            f"packRGB565={(t_pack - t_tobytes):.3f}s "
-            f"blit={(t_blit - t_pack):.3f}s "
-            f"total={(t_blit - t0):.3f}s",
-            file=sys.stderr,
-            flush=True,
-        )
+        # Always print slow-tick breakdowns — a regression signal.
+        if (t_blit - t0) > 0.5 or debug:
+            print(
+                f"[FbdevRunner] _draw breakdown tick: "
+                f"paint={(t_paint - t0):.3f}s "
+                f"tobytes={(t_tobytes - t_paint):.3f}s "
+                f"packRGB565={(t_pack - t_tobytes):.3f}s "
+                f"blit={(t_blit - t_pack):.3f}s "
+                f"total={(t_blit - t0):.3f}s",
+                file=sys.stderr,
+                flush=True,
+            )
 
-    def _draw_one(self, r: SensorReading, idx: int,
-                  *, base_y: int = 0) -> None:
-        raise NotImplementedError(
-            "_draw_one is now folded into _draw_tile; the panel"
-        )
+    def _sensor_block_lines(self, sensor, last_r):
+        """The four block lines for one sensor slot (layout v5).
 
-    def _draw_tile(self, sensor, idx, last_r, cur_r, *, base_y=0) -> None:
-        """One tile per sensor slot. Always renders, even on cold start.
-
-        \`last_r\` is the last-known-good reading (cached). When it
-        is None we still paint the tile using \`cur_r\`'s source
-        string so the failure is visible on-screen — a black tile
-        in the BLE-down case is harder to triage than one with the
-        connect-fail line.
+        Title always renders (white); value lines render white with
+        the latest known-good value, or red `n/a` when the field has
+        never produced data.
         """
-        mac, name, loc = sensor
-        x = 20
-        src = "live" if last_r is not None else (
-            cur_r.source if cur_r is not None else "no-data"
-        )
-        head = f"{loc or '(unnamed)'} \u2014 {name or mac}  [{src}]"
-        self.draw.text(
-            (x, base_y), head,
-            fill=(255, 255, 255), font=self.font_big,
-        )
+        _, _, loc = sensor
+        title = (loc or "(unnamed)").capitalize()
+        lines = [title]
         if last_r is None:
-            # No live ever. Show three n/a rows in the failure
-            # colour so the tile reads "the data is not flowing".
-            self._draw_line("T", None, "\u00b0C",   x, base_y + 70)
-            self._draw_line("H", None, "%RH", x, base_y + 96)
-            self._draw_line("B", None, "ADC", x, base_y + 122)
-            return
-        self._draw_line("T", last_r.temp_c, "\u00b0C",   x, base_y + 70)
-        self._draw_line("H", last_r.hum_percent, "%RH", x, base_y + 96)
-        self._draw_line("B", last_r.batt_raw, "ADC", x, base_y + 122)
-
-    def _draw_clock(self, top_y: int, center_x: int) -> None:
-        """Render the wall-clock face and date row.
-
-        Centred horizontally so the seconds change always visible
-        in the kitchen doesn't compete with the tiles for the
-        left edge.
-        """
-        clock_text = self.time_formatter.clock()
-        date_text = self.time_formatter.date()
-        # PIL's `textbbox` lets us measure the glyph extents so we
-        # can right-justify around `center_x` without estimating
-        # Arial-vs-DejaVuSans widths.
-        cx_t, cy_t, cw_t, ch_t = self.draw.textbbox(
-            (0, 0), clock_text, font=self.font_clock,
-        )
-        self.draw.text(
-            (center_x - cw_t // 2, top_y),
-            clock_text,
-            fill=(255, 255, 255),
-            font=self.font_clock,
-        )
-        # Date row directly below the clock, centred to the same
-        # horizontal axis.
-        cx_d, cy_d, cw_d, ch_d = self.draw.textbbox(
-            (0, 0), date_text, font=self.font_big,
-        )
-        # We are already past the clock bbox — `cy_d` is the
-        # ascender; align with our planned date_y rather than
-        # letting the bbox play it loose.
-        self.draw.text(
-            (center_x - cw_d // 2, top_y + 154),
-            date_text,
-            fill=(180, 180, 180),
-            font=self.font_big,
-        )
-
-    def _draw_line(self, label, value, unit, x, y):
-        if value is None:
-            text, color = f"{label}: n/a", (220, 60, 60)
-        elif isinstance(value, float):
-            text, color = f"{label}: {value:.1f} {unit}", (255, 255, 255)
+            lines += [("Temp: n/a", textfit.NA_FG),
+                      ("Rel. Hum.: n/a", textfit.NA_FG),
+                      ("Battery: n/a", textfit.NA_FG)]
+            return lines
+        lines.append(f"Temp: {last_r.temp_c:.1f} °C"
+                     if last_r.temp_c is not None
+                     else ("Temp: n/a", textfit.NA_FG))
+        lines.append(f"Rel. Hum.: {last_r.hum_percent:.1f}%"
+                     if last_r.hum_percent is not None
+                     else ("Rel. Hum.: n/a", textfit.NA_FG))
+        if last_r.batt_mv is not None:
+            lines.append(f"Battery: {last_r.batt_mv / 1000:.2f}V")
         else:
-            text, color = f"{label}: {value} {unit}", (255, 255, 255)
-        self.draw.text((x, y), text, fill=color, font=self.font_small)
+            lines.append(("Battery: n/a", textfit.NA_FG))
+        return lines

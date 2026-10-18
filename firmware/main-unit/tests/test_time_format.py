@@ -105,17 +105,17 @@ class TestDateString(unittest.TestCase):
     def test_compact_date(self):
         # Sep 20, 2026 was a Sunday.
         fake = datetime(2026, 9, 20, 14, 0, 0, tzinfo=AWST)
-        self.assertEqual(self.tf.date(fake), "Sun 20 Sep")
+        self.assertEqual(self.tf.date(fake), "Sun, 20 Sep 2026")
 
     def test_first_of_month(self):
         fake = datetime(2026, 1, 1, 0, 0, 0, tzinfo=AWST)
         # 1 Jan 2026 is a Thursday.
-        self.assertEqual(self.tf.date(fake), "Thu 01 Jan")
+        self.assertEqual(self.tf.date(fake), "Thu, 01 Jan 2026")
 
     def test_zero_padded_day(self):
         # 7 March 2026 (Saturday) — %d pads single-digit day to "07".
         fake = datetime(2026, 3, 7, 12, 0, 0, tzinfo=AWST)
-        self.assertEqual(self.tf.date(fake), "Sat 07 Mar")
+        self.assertEqual(self.tf.date(fake), "Sat, 07 Mar 2026")
 
 
 class TestTimezone(unittest.TestCase):
@@ -123,7 +123,7 @@ class TestTimezone(unittest.TestCase):
         tf = TimeFormatter(tz_name="UTC")
         fake = datetime(2026, 9, 20, 14, 30, 0, tzinfo=ZoneInfo("UTC"))
         self.assertEqual(tf.clock(fake), "2:30 PM")
-        self.assertEqual(tf.date(fake), "Sun 20 Sep")
+        self.assertEqual(tf.date(fake), "Sun, 20 Sep 2026")
 
     def test_wrong_zoneinfo_key_raises_at_construction(self):
         with self.assertRaises(Exception):

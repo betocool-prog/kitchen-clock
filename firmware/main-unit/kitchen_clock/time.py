@@ -9,9 +9,10 @@ fake time. Once NTP lands, the system's monotonic clock keeps
 ticking even if Wi-Fi drops — we just resync when Wi-Fi comes
 back.
 
-The format chosen by the user: 12-hour with a *leading* AM/PM
-marker, and a compact date line ("Mon 20 Sep"). A `--time-format
-24h` override exists for kiosk installs in 24-hour regions.
+The format chosen by the user: 12-hour clock with a trailing AM/PM
+marker ("10:32 PM", no seconds), and the date as "Sun, 18 Oct 2026"
+(layout v5, docs/design/layout-v5.png). A `--time-format 24h`
+override exists for kiosk installs in 24-hour regions.
 
 locale: we use `%p` (AM/PM) and `%a %b` (Mon, Sep) — these are
 en_US by default in CPython. If the Pi was deployed with a non-en
@@ -69,5 +70,5 @@ class TimeFormatter:
         return f"{hour}:{t.strftime('%M')} {t.strftime('%p')}"
 
     def date(self, fake_value: Optional[datetime] = None) -> str:
-        """Compact, locale-flavoured date row: 'Mon 20 Sep'."""
-        return self.now(fake_value).strftime("%a %d %b")
+        """Date row for the top-left box (layout v5): 'Sun, 18 Oct 2026'."""
+        return self.now(fake_value).strftime("%a, %d %b %Y")

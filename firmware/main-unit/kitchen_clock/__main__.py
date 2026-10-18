@@ -38,7 +38,7 @@ def main() -> int:
     ap.add_argument("--mock", action="store_true",
                     help="Bypass BLE; read synthetic readings.")
     ap.add_argument("--sensor", default="all",
-                    choices=("outdoor", "indoor", "all"),
+                    choices=("outside", "inside", "all"),
                     help="Filter which bonded sensors to read.")
     ap.add_argument("--period", default=0.25, type=float,
                     help="Period between read cycles in seconds (default: 0.25 = 4 fps).")

@@ -17,12 +17,12 @@ cycling (2026-10-17 incident). Passive scanning has no connection
 state to wedge: reports arrive, tiles update, and a dead radio is
 just staleness the watchdog can recover by restarting the scanner.
 
-Service-data payload (matches ble.c):
+Service-data payload (matches ble.c, firmware v10):
     byte  0     flags / firmware-version marker (0xNN = vNN)
     bytes 1-2   temperature, int16 LE centi-°C  (0.01 °C)
     bytes 3-4   humidity,    uint16 LE centi-%RH (0.01 %RH)
-    bytes 5-6   battery,    uint16 LE raw SAADC counts
-                (0 = "no data", same sentinel as the GATT char)
+    bytes 5-6   battery,    uint16 LE millivolts (firmware-side linear
+                calibration: mV = ticks × 4010 / 1102; 0 = "no data")
 
 Decode functions are pure and unit-tested (tests/test_ble_scanner.py)
 without any bluetooth hardware; the hub itself is exercised on the
@@ -35,7 +35,7 @@ from typing import Optional, Tuple
 
 from .bleak_client import (
     SensorReading,
-    decode_battery_raw,
+    decode_battery_mv,
     decode_humidity,
     decode_temperature,
 )
@@ -66,17 +66,17 @@ except ImportError:                       # noqa: F401
 def decode_service_data(sd):
     """Decode a 7-byte ESS service-data payload.
 
-    Returns a dict {"flags", "temp_c", "hum_percent", "batt_raw"}
+    Returns a dict {"flags", "temp_c", "hum_percent", "batt_mv"}
     or None when the payload is short/garbage. A battery value of
-    0 keeps the GATT sentinel semantics and maps to None ("no data")
-    so the runner's merge keeps the previous battery reading.
+    0 keeps the "no data" sentinel semantics and maps to None so
+    the runner's merge keeps the previous battery reading.
     """
     if sd is None or len(sd) < 7:
         return None
     payload = bytes(sd)
     temp_c = decode_temperature(payload[1:3])
     hum = decode_humidity(payload[3:5])
-    batt = decode_battery_raw(payload[5:7])
+    batt = decode_battery_mv(payload[5:7])
     if temp_c is None or hum is None or batt is None:
         return None
     return {
@@ -84,7 +84,7 @@ def decode_service_data(sd):
         "temp_c": temp_c,
         "hum_percent": hum,
         # 0 = firmware "no data" sentinel, same as the GATT char.
-        "batt_raw": None if batt == 0 else batt,
+        "batt_mv": None if batt == 0 else batt,
     }
 
 

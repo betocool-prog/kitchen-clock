@@ -273,7 +273,7 @@ class BaseRunner:
                 f"{r.location}={r.source.split(':', 1)[0]}"
                 f":T={r.temp_c if isinstance(r.temp_c, (int, float)) else '-'}"
                 f":H={r.hum_percent if isinstance(r.hum_percent, (int, float)) else '-'}"
-                f":B={r.batt_raw if isinstance(r.batt_raw, int) else '-'}"
+                f":B={r.batt_mv if isinstance(r.batt_mv, int) else '-'}"
                 for r in self.current_readings if r is not None
             )
             if states != self._last_state_line or tick_n % self.HEARTBEAT_TICKS == 0:
