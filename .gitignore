@@ -10,6 +10,9 @@ firmware/modules/
 firmware/tools/
 firmware/zephyr/
 
+# Build outputs (sensor firmware .uf2 from scripts/build-sensor.sh).
+/dist/
+
 # Local diagnostic artifacts (panel screenshots for visual review).
 /panel-snapshot*.png
 /panel-snapshots/
