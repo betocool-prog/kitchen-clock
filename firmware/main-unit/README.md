@@ -50,7 +50,7 @@ Flags / env vars:
 | `--sensor` | `outdoor`/`indoor`/`all` | `all` | registry filter |
 | `--period` | seconds | `0.25` | render period (4 fps) |
 | `--timezone` | IANA key | `Australia/Perth` | |
-| `--time-format` | `12h`/`24h` | `12h` | |
+| `--time-format` | `12h`/`24h` | `24h` | |
 | `KITCHEN_CLOCK_RENDERER` | `pygame`/`fbdev` | `fbdev` | Pi service uses `fbdev` |
 | `KITCHEN_CLOCK_BLE` | `mock`/`live` | `mock` | `live` = scanner hub |
 

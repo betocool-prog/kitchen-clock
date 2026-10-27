@@ -9,10 +9,11 @@ fake time. Once NTP lands, the system's monotonic clock keeps
 ticking even if Wi-Fi drops — we just resync when Wi-Fi comes
 back.
 
-The format chosen by the user: 12-hour clock with a trailing AM/PM
-marker ("10:32 PM", no seconds), and the date as "Sun, 18 Oct 2026"
-(layout v5, docs/design/layout-v5.png). A `--time-format 24h`
-override exists for kiosk installs in 24-hour regions.
+The format chosen by the user: 24-hour clock ("22:32", no seconds;
+layout v6 — dropping AM/PM lets the clock grow to fill its box),
+and the date as "Sun, 18 Oct 2026" (layout v5,
+docs/design/layout-v5.png). `--time-format 12h` restores the
+"10:32 PM" form.
 
 locale: we use `%p` (AM/PM) and `%a %b` (Mon, Sep) — these are
 en_US by default in CPython. If the Pi was deployed with a non-en
@@ -27,7 +28,7 @@ from zoneinfo import ZoneInfo
 # tz database key for "Australia/Perth" — the only tz the kitchen
 # is built for.
 DEFAULT_TIMEZONE = "Australia/Perth"
-DEFAULT_TIME_FORMAT = "12h"     # '12h' or '24h'
+DEFAULT_TIME_FORMAT = "24h"     # '12h' or '24h'
 
 
 class TimeFormatter:
@@ -72,3 +73,11 @@ class TimeFormatter:
     def date(self, fake_value: Optional[datetime] = None) -> str:
         """Date row for the top-left box (layout v5): 'Sun, 18 Oct 2026'."""
         return self.now(fake_value).strftime("%a, %d %b %Y")
+
+    def hm24(self, t_epoch: float) -> str:
+        """24-hour HH:MM of a wall-clock epoch — the Hi/Lo times (layout v6).
+
+        Takes the sample's epoch (not "now"): the history records
+        `time.time()` and this renders it in the clock's tz.
+        """
+        return datetime.fromtimestamp(t_epoch, self.tz).strftime("%H:%M")

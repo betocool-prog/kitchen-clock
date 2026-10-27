@@ -181,14 +181,17 @@ if ! printf '%s' "$content" | grep -qE 'ieee80211_regdom|80211\.regdom'; then
         printf 'cmdline.txt: appended cfg80211.ieee80211_regdom=%s\n' "${WIFI_COUNTRY}" >&2
     fi
 
-    # Three more tokens we always want present:
+    # Four more tokens we always want present:
     #   console=ttyS0,115200 — UART (GPIO 14/15) login getty stays alive.
     #   console=tty3          — PyGame stderr / journal target.
     #   loglevel=3            — suppresses noise on both consoles.
+    #   vt.global_cursor_default=0 — no fbcon cursor blinking
+    #                           through the panel's framebuffer.
     for tok in \
         "console=ttyS0,115200" \
         "console=tty3" \
-        "loglevel=3"; do
+        "loglevel=3" \
+        "vt.global_cursor_default=0"; do
         if ! grep -qF "$tok" <<< "$content"; then
             content="${content} ${tok}"
             APPENDED=1

@@ -38,6 +38,7 @@ LINE_W = 5
 FG = (255, 255, 255)
 BG = (0, 0, 0)
 NA_FG = (220, 60, 60)        # n/a lines render red
+STALE_FG = (128, 128, 128)   # stale sensor blocks render mid-grey
 
 MARGIN = 24                  # left/right text margin in every box
 BLOCK_LEADING = 1.35         # sensor-block baseline step, in em
@@ -192,15 +193,18 @@ def fit_block(font_path, fit_lines, box):
     representative strings) fits the width cap; all lines share that
     size on a BLOCK_LEADING-em baseline grid, and the block is
     centred vertically using the fit strings' ink. Actual strings
-    are drawn left-aligned at MARGIN on the same fixed grid.
+    are drawn left-aligned at MARGIN on the same fixed grid. An
+    empty string is a blank spacer line: it holds a grid slot but
+    is never measured (no ink).
     """
+    inked = [(i, ln) for i, ln in enumerate(fit_lines) if ln]
     box_w = box[2] - box[0] + 1
     max_w = box_w - 2 * MARGIN
 
     def widest_ink(size):
         font = ImageFont.truetype(font_path, size)
         return max(ink_offsets(font, ln)[2] - ink_offsets(font, ln)[0]
-                   for ln in fit_lines)
+                   for _, ln in inked)
 
     lo, hi = 8, 400
     best = None
@@ -217,9 +221,9 @@ def fit_block(font_path, fit_lines, box):
 
     font = ImageFont.truetype(font_path, size)
     step = round(size * BLOCK_LEADING)
-    offs = [ink_offsets(font, ln) for ln in fit_lines]
-    tops = [i * step + o[1] for i, o in enumerate(offs)]
-    bottoms = [i * step + o[3] for i, o in enumerate(offs)]
+    offs = [(i, ink_offsets(font, ln)) for i, ln in inked]
+    tops = [i * step + o[1] for i, o in offs]
+    bottoms = [i * step + o[3] for i, o in offs]
     block_top, block_bottom = min(tops), max(bottoms)
     cy = (box[1] + box[3]) / 2
     base = round(cy - (block_top + block_bottom) / 2)
@@ -245,5 +249,7 @@ def draw_fitted_block(d, plan, lines, fg=FG):
     box = plan["box"]
     for i, item in enumerate(lines):
         text, colour = (item, fg) if isinstance(item, str) else item
+        if not text:
+            continue
         d.text((box[0] + MARGIN, plan["base"] + i * plan["step"]), text,
                fill=colour, font=plan["font"])

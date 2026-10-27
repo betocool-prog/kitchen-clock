@@ -9,7 +9,7 @@ Env vars:
                               and never opens a GATT connection).
   KITCHEN_CLOCK_TIMEZONE    — IANA tz database key, default
                               'Australia/Perth' (AWST).
-  KITCHEN_CLOCK_TIME_FORMAT — '12h' (default) or '24h'.
+  KITCHEN_CLOCK_TIME_FORMAT — '24h' (default) or '12h'.
 
 CLI flags:
   --mock                    — equivalent: KITCHEN_CLOCK_BLE=mock.
@@ -24,6 +24,7 @@ import os
 import sys
 
 from .config import sensors as sensors_mod
+from .history import HistoryStore
 from .ble.bleak_client import make_client
 from .ble.scanner import ScannerClient, ScannerHub
 from .time import TimeFormatter, DEFAULT_TIMEZONE, DEFAULT_TIME_FORMAT
@@ -48,7 +49,7 @@ def main() -> int:
                          "if --render-time is not suppressed).")
     ap.add_argument("--time-format", default=None,
                     choices=("12h", "24h"),
-                    help="'12h' leading AM/PM (default) or '24h'.")
+                    help="'24h' (default) or '12h' with trailing AM/PM.")
     args = ap.parse_args()
 
     ble_mode = "mock" if args.mock \
@@ -81,14 +82,27 @@ def main() -> int:
                                   time_format=tf_format)
 
     renderer_cls = make_renderer()
+    hub = None
+    history = None
     if ble_mode == "live":
         # Scanner transport (ADR 0012): the hub runs a filtered
         # passive scan; clients drain its cached reports. No GATT
-        # connections are ever opened.
+        # connections are ever opened. Fresh reports feed the
+        # 24 h min/max history (layout v6); the sink is guarded so
+        # history can never take the scanner down.
+        import time as _time
+
         hub = ScannerHub(sensor_list)
+        history = HistoryStore()
+
+        def _on_sample(sensor, decoded):
+            mac, name, loc = sensor
+            history.record(name, _time.time(),
+                           decoded["temp_c"], decoded["hum_percent"])
+
+        hub.on_sample = _on_sample
         client_factory = lambda s: ScannerClient(s, hub)  # noqa: E731
     else:
-        hub = None
         client_factory = lambda s: make_client(s, mode="mock")  # noqa: E731
 
     runner = renderer_cls(
@@ -99,6 +113,7 @@ def main() -> int:
     )
     if hub is not None:
         runner.ble_hub = hub
+        runner.history = history
 
     asyncio.run(runner.run())
     return 0

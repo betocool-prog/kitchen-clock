@@ -190,6 +190,7 @@ class BaseRunner:
         self.last_readings: list = [None] * len(self.sensors)
         self.current_readings: list = [None] * len(self.sensors)
         self.ble_hub = None                    # ScannerHub in live mode
+        self.history = None                    # HistoryStore in live mode
         self._scan_watchdog = ScanWatchdog()
         self._recovery_in_flight = False
         self._ble_tick_counter = 0

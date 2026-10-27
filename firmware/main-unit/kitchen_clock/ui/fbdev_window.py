@@ -13,24 +13,31 @@ bypassing SDL entirely. The framebuffer is what the HDMI panel
 displays verbatim — exactly the same surface the kernel boot
 splash uses.
 
-Layout (v5, docs/design/layout-v5.png — designed blind via
-`scripts/render-layout-mockup.py`, numerically audited):
+Layout (v6; v5 geometry from docs/design/layout-v5.png — designed
+blind via `scripts/render-layout-mockup.py`, numerically audited):
 
   - three 5-px white divider lines: x=700 (vertical, full height),
     y=123 across the left box, y=300 across the right box
   - top-left box: the date, "Sun, 18 Oct 2026", width-fitted
-  - bottom-left box: the time, "10:32 PM", width-fitted
-  - top-right box: the Outside sensor block — 4 lines
-    ("Outside" / "Temp: 34.2 °C" / "Rel. Hum.: 23.3%" /
-    "Battery: 3.33V"), uniform font sized to the widest worst-case
-    line, 1.35-em baseline grid, block centred
+  - bottom-left box: the time, 24h "22:32", width-fitted (the
+    dropped AM/PM is what lets the digits grow)
+  - top-right box: the Outside sensor block — 7 grid lines
+    ("Outside" / "Temp: 34.2 °C" / "Rel. Hum.: 23.3%" / blank /
+    "Hi: 36.0 °C 14:05" / "Lo: 21.3 °C 05:40" / "Battery: 3.33V"),
+    uniform font sized to the widest worst-case line, 1.35-em
+    baseline grid, block centred
   - bottom-right box: the Inside block, same treatment
+
+Hi/Lo are the 24 h extremes from `kitchen_clock/history.py` with
+the 24h time each occurred. A sensor silent for STALE_AFTER_S
+renders its whole block mid-grey with "(stale)" on the title; a
+battery at or below LOW_BATT_MV renders red with "(!)".
 
 Font sizes are constants (computed once at init from worst-case
 representative strings, since DejaVu digits are not tabular), so
 nothing jumps size day to day. Missing values render as red "n/a"
 lines; a tile that has never seen data still renders its title and
-three n/a lines.
+five n/a lines.
 
 API mirrors `PygameRunner` so `BaseRunner` keeps a single code
 path. The two runners are interchangeable at the call site.
@@ -71,6 +78,19 @@ SYSFB = "/sys/class/graphics/fb0"
 # is gated behind this env var; the slow-tick breakdown (>0.5 s)
 # always prints — it's a regression signal, not chatter.
 DEBUG_DRAW_ENV = "KITCHEN_CLOCK_DEBUG_DRAW"
+
+# Low-battery flag (layout v6): at or below this millivolt reading
+# the whole battery line renders red with "(!)" appended —
+# "Battery: 3.20V (!)". Pi-side from the decoded mV; the firmware
+# is not involved.
+LOW_BATT_MV = 3200
+
+# Stale flag (layout v6): a sensor whose last advertisement report
+# is at least this old renders mid-grey with "(stale)" on the
+# title. 3 min = 12 missed 15 s samples — well past the scanner's
+# own 30 s FRESH_WINDOW_S and the 90 s watchdog, so a scanner
+# restart gets its chance before the panel admits to old data.
+STALE_AFTER_S = 180.0
 
 
 def _read_sysfs(name):
@@ -186,20 +206,26 @@ def _rgb_to_framebuffer_pure(rgb_bytes: bytes, bpp: int,
 
 
 class FbdevRunner(BaseRunner):
-    """Path A's fbdev renderer on the Pi runtime — layout v5."""
+    """Path A's fbdev renderer on the Pi runtime — layout v6."""
 
     # Worst-case representative fit strings (measured on DejaVu
     # Bold: "Wed"/"May" are the widest name abbreviations, '4'/'0'
-    # the widest digits, "Rel. Hum.: 100.0%" the widest sensor
-    # line — see textfit.py and the design loop in
-    # docs/design/ for how these were derived).
+    # the widest digits; layout v6 adds the Hi/Lo lines (worst case
+    # a leading '-'), the "(stale)" title and the low-battery flag
+    # variant of the battery line — see textfit.py and docs/design/
+    # for how these were derived). The clock fit string follows the
+    # time format so 24h digits get the AM/PM width too.
     DATE_FIT_WORST = "Wed, 44 May 2026"
-    TIME_FIT_WORST = "44:44 PM"
+    TIME_FIT_WORST_24H = "44:44"
+    TIME_FIT_WORST_12H = "44:44 PM"
     SENSOR_FIT_LINES = (
-        "Outside",
+        "Outside (stale)",
         "Temp: -12.3 °C",
         "Rel. Hum.: 100.0%",
-        "Battery: 4.99V",
+        "",                         # blank spacer line
+        "Hi: -12.3 °C 44:44",
+        "Lo: -12.3 °C 44:44",
+        "Battery: 4.99V (!)",
     )
 
     def __init__(self, *, make_client, sensors, period_s: float = 2.0,
@@ -237,8 +263,12 @@ class FbdevRunner(BaseRunner):
         self._date_plan = textfit.fit_single(
             font_path, self.DATE_FIT_WORST, regions["left_top"],
         )
+        time_fit = (self.TIME_FIT_WORST_12H
+                    if time_formatter is not None
+                    and time_formatter.time_format == "12h"
+                    else self.TIME_FIT_WORST_24H)
         self._time_plan = textfit.fit_single(
-            font_path, self.TIME_FIT_WORST, regions["left_bottom"],
+            font_path, time_fit, regions["left_bottom"],
         )
         self._sensor_plans = [
             textfit.fit_block(font_path, self.SENSOR_FIT_LINES,
@@ -248,7 +278,7 @@ class FbdevRunner(BaseRunner):
         ]
         self._ink = textfit.InkCache()
         print(
-            f"[FbdevRunner] layout v5: date {self._date_plan['size']} pt, "
+            f"[FbdevRunner] layout v6: date {self._date_plan['size']} pt, "
             f"time {self._time_plan['size']} pt, "
             f"sensors {self._sensor_plans[0]['size']} pt "
             f"(font {font_path})",
@@ -309,7 +339,7 @@ class FbdevRunner(BaseRunner):
                            self.time_formatter.clock(), self._ink)
 
         # Right column: one sensor block per registered sensor, in
-        # registry order (layout v5 has two right boxes).
+        # registry order (layout v5/v6 has two right boxes).
         for i, sensor in enumerate(self.sensors):
             if i >= len(self._sensor_plans):
                 break
@@ -344,28 +374,57 @@ class FbdevRunner(BaseRunner):
             )
 
     def _sensor_block_lines(self, sensor, last_r):
-        """The four block lines for one sensor slot (layout v5).
+        """The block lines for one sensor slot (layout v6).
 
-        Title always renders (white); value lines render white with
-        the latest known-good value, or red `n/a` when the field has
-        never produced data.
+        Order: title / Temp / Rel. Hum. / blank / Hi / Lo / Battery.
+
+        Value lines render white with the latest known-good value,
+        or red `n/a` when the field has never produced data (Hi/Lo:
+        when the 24 h history is empty, e.g. after a reboot). A
+        stale sensor turns every non-red line mid-grey and tags the
+        title "(stale)"; a low battery renders red with "(!)".
         """
-        _, _, loc = sensor
+        _, name, loc = sensor
+        na = textfit.NA_FG
+        stale = self._is_stale(sensor)
+        fg = textfit.STALE_FG if stale else textfit.FG
         title = (loc or "(unnamed)").capitalize()
-        lines = [title]
+        lines = [(f"{title} (stale)" if stale else title, fg)]
         if last_r is None:
-            lines += [("Temp: n/a", textfit.NA_FG),
-                      ("Rel. Hum.: n/a", textfit.NA_FG),
-                      ("Battery: n/a", textfit.NA_FG)]
+            lines += [("Temp: n/a", na), ("Rel. Hum.: n/a", na), "",
+                      ("Hi: n/a", na), ("Lo: n/a", na), ("Battery: n/a", na)]
             return lines
-        lines.append(f"Temp: {last_r.temp_c:.1f} °C"
+        lines.append((f"Temp: {last_r.temp_c:.1f} °C", fg)
                      if last_r.temp_c is not None
-                     else ("Temp: n/a", textfit.NA_FG))
-        lines.append(f"Rel. Hum.: {last_r.hum_percent:.1f}%"
+                     else ("Temp: n/a", na))
+        lines.append((f"Rel. Hum.: {last_r.hum_percent:.1f}%", fg)
                      if last_r.hum_percent is not None
-                     else ("Rel. Hum.: n/a", textfit.NA_FG))
-        if last_r.batt_mv is not None:
-            lines.append(f"Battery: {last_r.batt_mv / 1000:.2f}V")
+                     else ("Rel. Hum.: n/a", na))
+        lines.append("")
+        mm = (self.history.minmax(name)
+              if self.history is not None else None)
+        if mm is None or self.time_formatter is None:
+            lines += [("Hi: n/a", na), ("Lo: n/a", na)]
         else:
-            lines.append(("Battery: n/a", textfit.NA_FG))
+            (t_lo, lo_c), (t_hi, hi_c) = mm
+            hm = self.time_formatter.hm24
+            lines.append((f"Hi: {hi_c:.1f} °C {hm(t_hi)}", fg))
+            lines.append((f"Lo: {lo_c:.1f} °C {hm(t_lo)}", fg))
+        if last_r.batt_mv is None:
+            lines.append(("Battery: n/a", na))
+        elif last_r.batt_mv <= LOW_BATT_MV:
+            lines.append((f"Battery: {last_r.batt_mv / 1000:.2f}V (!)", na))
+        else:
+            lines.append((f"Battery: {last_r.batt_mv / 1000:.2f}V", fg))
         return lines
+
+    def _is_stale(self, sensor) -> bool:
+        """True when the sensor's last report is >= STALE_AFTER_S old.
+
+        A sensor never heard from is not "stale" — its lines are
+        already red n/a. Mock mode (no hub) is never stale.
+        """
+        if self.ble_hub is None:
+            return False
+        _, age = self.ble_hub.report_for(sensor)
+        return age is not None and age >= STALE_AFTER_S

@@ -75,8 +75,10 @@ mount -t vfat -o rw "${BOOT_DEV}" "${MNT_BOOT}"
 
 # Compose a complete kernel command line for the BCM2835 / Pi Zero
 # W. On Trixie kernel 6.18, the 8250 driver drag the PL011 in as
-# ttyS0; that's the UART on GPIO 14/15.
-NEW_CMDLINE="console=ttyS0,115200 console=tty1 root=PARTUUID=${ROOT_PARTUUID} rootfstype=ext4 fsck.repair=yes rootwait cfg80211.ieee80211_regdom=AU"
+# ttyS0; that's the UART on GPIO 14/15. vt.global_cursor_default=0
+# hides the fbcon text cursor, which otherwise blinks through the
+# panel's framebuffer (top-left, under the date).
+NEW_CMDLINE="console=ttyS0,115200 console=tty1 root=PARTUUID=${ROOT_PARTUUID} rootfstype=ext4 fsck.repair=yes rootwait cfg80211.ieee80211_regdom=AU vt.global_cursor_default=0"
 printf '%s\n' "${NEW_CMDLINE}" > "${MNT_BOOT}/cmdline.txt"
 sync
 

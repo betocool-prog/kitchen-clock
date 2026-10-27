@@ -116,6 +116,12 @@ class ScannerHub:
         # "flash v8" instead of just showing n/a tiles.
         self.legacy_reports: int = 0
         self.report_count: int = 0
+        # Optional fresh-sample sink: called as on_sample(sensor_tuple,
+        # decoded_dict) for every decodable report. The 24 h history
+        # (kitchen_clock/history.py) subscribes here — freshness is
+        # guaranteed only inside this callback, so it's the one place
+        # the render cache's stale values can't leak into history.
+        self.on_sample = None
         self._started_at: Optional[float] = None
         self._scanner = None
 
@@ -186,6 +192,11 @@ class ScannerHub:
         )
         self.last_seen[name_s] = time.monotonic()
         self.report_count += 1
+        if self.on_sample is not None:
+            try:
+                self.on_sample((mac_s, name_s, loc_s), decoded)
+            except Exception:  # noqa: BLE001 — a sample sink must
+                pass          # never take the scanner down
 
     def report_for(self, sensor) -> Tuple[Optional[SensorReading],
                                           Optional[float]]:

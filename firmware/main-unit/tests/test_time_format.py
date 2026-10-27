@@ -26,13 +26,13 @@ AWST = ZoneInfo("Australia/Perth")
 
 
 class TestDefaults(unittest.TestCase):
-    def test_defaults_are_AWST_12h(self):
+    def test_defaults_are_AWST_24h(self):
         tf = TimeFormatter()
         self.assertEqual(tf.tz, AWST)
-        self.assertEqual(tf.time_format, "12h")
+        self.assertEqual(tf.time_format, "24h")
         # constants exposed match the constructor defaults.
         self.assertEqual(DEFAULT_TIMEZONE, "Australia/Perth")
-        self.assertEqual(DEFAULT_TIME_FORMAT, "12h")
+        self.assertEqual(DEFAULT_TIME_FORMAT, "24h")
 
     def test_unknown_format_raises(self):
         with self.assertRaises(ValueError):
@@ -98,6 +98,20 @@ class TestClock24h(unittest.TestCase):
         self.assertEqual(self.tf.clock(fake), "00:01")
 
 
+class TestHm24(unittest.TestCase):
+    """Hi/Lo 'at' times: an epoch rendered in the formatter's tz."""
+
+    def test_epoch_in_awst(self):
+        tf = TimeFormatter(tz_name="Australia/Perth")
+        t = datetime(2026, 10, 27, 5, 40, 59, tzinfo=AWST).timestamp()
+        self.assertEqual(tf.hm24(t), "05:40")
+
+    def test_ignores_time_format(self):
+        tf = TimeFormatter(tz_name="Australia/Perth", time_format="12h")
+        t = datetime(2026, 10, 27, 23, 45, tzinfo=AWST).timestamp()
+        self.assertEqual(tf.hm24(t), "23:45")
+
+
 class TestDateString(unittest.TestCase):
     def setUp(self):
         self.tf = TimeFormatter(tz_name="Australia/Perth")
@@ -122,7 +136,7 @@ class TestTimezone(unittest.TestCase):
     def test_utc_works(self):
         tf = TimeFormatter(tz_name="UTC")
         fake = datetime(2026, 9, 20, 14, 30, 0, tzinfo=ZoneInfo("UTC"))
-        self.assertEqual(tf.clock(fake), "2:30 PM")
+        self.assertEqual(tf.clock(fake), "14:30")
         self.assertEqual(tf.date(fake), "Sun, 20 Sep 2026")
 
     def test_wrong_zoneinfo_key_raises_at_construction(self):
